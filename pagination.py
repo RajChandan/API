@@ -62,3 +62,45 @@ def decode_cursor(cursor:str) -> Tuple[datetime,int]:
 
 def item_to_dict(it:Item) -> Dict[str,Any]:
     return {"id":it.id,"name":it.name,"created_at":it.created_at.isoformat()}
+
+class ItemResponse(BaseModel):
+    data : List[Dict[str,Any]]
+    limit : int
+    next_cursor : Optional[str] = None
+    prev_cursor : Optional[str] = None
+    offset : Optional[int] = None
+    total : Optional[int] = None
+    page : Optional[int] = None
+    has_next : Optional[bool] = None
+
+
+@app.get("/",tags=["meta"])
+def root():
+    return {
+        "name":"Pagination API",
+        "endpoints" : {
+           "offset": "/items?limit=20&offset=0",
+"page": "/items/page?limit=20&page=1",
+"cursor": "/items/cursor?limit=20",
+"time_window": "/items/time?start=2025-01-01T00:00:00Z&end=2025-01-02T00:00:00Z&limit=20",
+        }
+    }
+
+@app.get("/items",response_model=ItemResponse,tags=["offset"])
+def get_list_items_offset(response:Response,limit:int=Query(20,ge=1,le=100),offset:int=Query(0,ge=0)):
+    with Session(engine) as session:
+        rows = session.execute(select(Item).order_by(desc(Item.created_at),desc(Item.id)).limit(limit).offset(offset))
+        rows = rows.scalars().all()
+
+        total :int = session.scalar(select(text("COUNT(*)")).select_from(Item)) or 0
+        has_next = (offset + limit) < total
+        if has_next:
+            next_offset = offset + limit
+            response.headers["Link"] = f"</items?limit={limit}&offset={next_offset}>; rel=\"next\""
+        return ItemResponse(
+            data = [item_to_dict(r) for r in rows],
+            limit = limit,
+            offset = offset,
+            total = total,
+            has_next = has_next
+        )
