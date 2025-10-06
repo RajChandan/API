@@ -104,3 +104,13 @@ def get_list_items_offset(response:Response,limit:int=Query(20,ge=1,le=100),offs
             total = total,
             has_next = has_next
         )
+    
+
+@app.get("/items/page",response_model = ItemResponse,tags=["offset"])
+def list_items_page(response:Response,limit:int=Query(20,ge=1,le=100),page:int=Query(1,ge=1)):
+    offset = (page - 1) * limit
+    payload = get_list_items_offset(response,limit=limit,offset=offset)
+    payload.page = page
+    if payload.has_next:
+        response.headers["Link"] = f"</items/page?limit={limit}&page={page+1}>; rel=\"next\""
+    return payload
