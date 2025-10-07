@@ -86,6 +86,8 @@ def root():
         }
     }
 
+
+#OFFSET BASED PAGINATION
 @app.get("/items",response_model=ItemResponse,tags=["offset"])
 def get_list_items_offset(response:Response,limit:int=Query(20,ge=1,le=100),offset:int=Query(0,ge=0)):
     with Session(engine) as session:
@@ -114,3 +116,21 @@ def list_items_page(response:Response,limit:int=Query(20,ge=1,le=100),page:int=Q
     if payload.has_next:
         response.headers["Link"] = f"</items/page?limit={limit}&page={page+1}>; rel=\"next\""
     return payload
+
+
+#CURSOR BASED PAGINATION
+@app.get("/items/cursor",response_model=ItemResponse,tags=["cursor"])
+def list_items_cursor(response:Response,limit:int=Query(20,ge=1,le=100),cursor:Optional[str]=None):
+    with Session(engine) as session:
+        q = select(Item).order_by(desc(Item.created_at),desc(Item.id))
+        if cursor:
+            created_at,id_ = decode_cursor(cursor)
+            q = q.where(or_(Item.created_at < created_at, and_(Item.created_at == created_at,Item.id < id_)))
+        rows = session.execute(q.limit(limit+1))
+        rows = rows.scalars().all()
+        has_next = len(rows) > limit
+        rows = rows[:limit]
+        next_cursor = encode_cursor(rows[-1].created_at,rows[-1].id) if has_next and rows else None
+        if next_cursor:
+            response.headers["Link"] = f"</items/cursor?limit={limit}&cursor={next_cursor}>; rel=\"next\""
+        return ItemResponse(data=[item_to_dict(r) for r in rows],limit = limit,next_cursor=next_cursor,has_next=has_next)
