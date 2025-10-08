@@ -134,3 +134,38 @@ def list_items_cursor(response:Response,limit:int=Query(20,ge=1,le=100),cursor:O
         if next_cursor:
             response.headers["Link"] = f"</items/cursor?limit={limit}&cursor={next_cursor}>; rel=\"next\""
         return ItemResponse(data=[item_to_dict(r) for r in rows],limit = limit,next_cursor=next_cursor,has_next=has_next)
+
+
+@app.get("/iems/time",response_model=ItemResponse,tags=["time_window"])
+def list_items_time_window(response:Response,
+                           start:Optional[str] = Query(None,description="ISO8601, e.g., 2025-01-01T00:00:00Z"),
+                           end:Optional[str] = Query(None,description="ISO8601, e.g., 2025-01-01T00:00:00Z"),
+                           limit:int=Query(20,ge=1,le=100),
+                           cursor:Optional[str] = Query(None,description="Within-window cursor (created_at,id)")):
+    def parse_iso(ts:Optional[str]) -> Optional[datetime]:
+        if not ts:
+            return None
+        return datetime.fromisoformat(ts.replace("Z", "+00:00")).replace(tzinfo=None)
+    
+    start_dt = parse_iso(start) if start else datetime.utcnow() - timedelta(days=1)
+    end_dt = parse_iso(end) if end else datetime.utcnow()
+
+    with Session(engine) as session:
+        q = (select(Item).where(and_(Item.created_at >= start_dt,Item.created_at <= end_dt)).order_by(desc(Item.created_at),desc(Item.id)))
+        
+        if cursor:
+            created_at,id_ = decode_cursor(cursor)
+            q = q.where(or_(Item.created_at < created_at, and_(Item.created_at == created_at,Item.id < id_)))
+        
+        rows = session.execute(q.limit(limit + 1))
+        rows = rows.scalars().all()
+
+        has_next = len(rows) > limit
+        rows = rows[:limit]
+        next_cursor = encode_cursor(rows[-1].created_at,rows[-1].id) if has_next and rows else None
+        if next_cursor:
+            response.headers["Link"] = (
+                                f"</items/time?start={start_dt.isoformat()}Z&end={end_dt.isoformat()}Z&limit={limit}&cursor={next_cursor}>; rel=\"next\""
+                                        )
+        return ItemResponse(data = [item_to_dict(r) for r in rows],limit=limit,next_cursor=next_cursor,has_next=has_next)
+
