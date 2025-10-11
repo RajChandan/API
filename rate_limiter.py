@@ -51,3 +51,81 @@ def finalize_or_429(request:Request,decision:Decision,limit_or_capacity:int,payl
     
     request.state.rate_limit_headers = headers
     return payload
+
+
+
+# --------------------
+# LIMITER STRATEGIES
+# --------------------
+
+
+class FixedWindowLimiter:
+    ''' 
+    Simple Counter per fixed window 
+    '''
+
+    def __init__(self,r:redis.Redis,limit:int,window_seconds:int,prefix:str="rl:fw"):
+        self.r = r
+        self.limit = limit
+        self.window = window_seconds
+        self.prefix = prefix
+
+    def _key(self,identifier:str) -> str:
+        current_window = int(_now() // self.window)
+        return f"{self.prefix}:{identifier}:{current_window}"
+    
+    async def allow(self,identifier:str) -> Decision:
+        key = self._key(identifier)
+
+        current = await self.r.incr(key)
+        if current == 1:
+            await self.r.expire(key,self.window)
+            ttl = self.window
+        else:
+            ttl = await self.r.ttl(key)
+            if ttl < 0:
+                await self.r.expire(key,self.window)
+                ttl = self.window
+            
+        if current <= self.limit:
+            return Decision(allowed=True,remaining=self.limit - current,reset_in=float(ttl))
+        else:
+            return Decision(allowed=False,remaining=0,reset_in=float(ttl))
+
+
+
+# --------------------
+# Fast API
+# --------------------
+
+app = FastAPI(title="Rate Limiter API",version="1.0.0")
+
+@app.middleware("http")
+async def add_rate_headers(request:Request,call_next):
+    print("In middleware")
+    response : Response = await call_next(request)
+    hdrs = getattr(request.state,"rate_limit_headers",None)
+    if hdrs:
+        for k,v in hdrs.items():
+            response.headers[k] = v
+    print(response.headers)
+    return response
+
+
+@app.get("/",tags=["meta"])
+def meta():
+    return {
+        "name": "Rate Limiting Lab",
+        "how": "Use X-API-Key to simulate different users; otherwise IP is used.",
+        "endpoints": {
+            "whoami": "/whoami",
+            "fixed": "/fixed?limit=10&window=60",
+            "sliding_log": "/sliding-log?limit=10&window=60",
+            "sliding_counter": "/sliding-counter?limit=10&window=60",
+            "token_bucket": "/token-bucket?capacity=10&refill_rate=2.0",
+            "leaky_bucket": "/leaky-bucket?capacity=10&leak_rate=2.0",
+        }
+    }
+
+
+
