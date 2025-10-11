@@ -129,3 +129,10 @@ def meta():
 
 
 
+@app.get("/whoami",tags=["meta"])
+def whoami(request:Request):
+    return {
+        "client_ip": request.client.host,
+        "client_port": request.client.port,
+        "api_key": request.headers.get("X-API-Key")
+    }
