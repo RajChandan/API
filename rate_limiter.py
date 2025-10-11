@@ -26,7 +26,7 @@ def _now() -> float:
     return time.time()
 
 def client_identifier(request:Request) -> str:
-    return request.header.get("X-API-Key") or request.client.host
+    return request.headers.get("X-API-Key") or request.client.host
 
 
 class Decision(BaseModel):
@@ -76,20 +76,25 @@ class FixedWindowLimiter:
     
     async def allow(self,identifier:str) -> Decision:
         key = self._key(identifier)
-
+        print("Key:", key)
         current = await self.r.incr(key)
+        print("Current:", current)
         if current == 1:
             await self.r.expire(key,self.window)
             ttl = self.window
+            print("TTL:", ttl, "set ttl")
         else:
             ttl = await self.r.ttl(key)
             if ttl < 0:
                 await self.r.expire(key,self.window)
                 ttl = self.window
+                print("TTL:", ttl, "reset ttl")
             
         if current <= self.limit:
+            print("Allowed:", current)
             return Decision(allowed=True,remaining=self.limit - current,reset_in=float(ttl))
         else:
+            print("Denied:", current)
             return Decision(allowed=False,remaining=0,reset_in=float(ttl))
 
 
@@ -120,10 +125,10 @@ def meta():
         "endpoints": {
             "whoami": "/whoami",
             "fixed": "/fixed?limit=10&window=60",
-            "sliding_log": "/sliding-log?limit=10&window=60",
-            "sliding_counter": "/sliding-counter?limit=10&window=60",
-            "token_bucket": "/token-bucket?capacity=10&refill_rate=2.0",
-            "leaky_bucket": "/leaky-bucket?capacity=10&leak_rate=2.0",
+            # "sliding_log": "/sliding-log?limit=10&window=60",
+            # "sliding_counter": "/sliding-counter?limit=10&window=60",
+            # "token_bucket": "/token-bucket?capacity=10&refill_rate=2.0",
+            # "leaky_bucket": "/leaky-bucket?capacity=10&leak_rate=2.0",
         }
     }
 
@@ -136,3 +141,14 @@ def whoami(request:Request):
         "client_port": request.client.port,
         "api_key": request.headers.get("X-API-Key")
     }
+
+
+# FIXED WINDOW
+
+@app.get("/fixed",tags=["Fixed"])
+async def fixed(request:Request,limit:int=Query(10,ge=1,le=100),window:int=Query(60,ge=1,le=3600)):
+    r = await get_redis()
+    limiter = FixedWindowLimiter(r,limit,window)
+    identifier = client_identifier(request)
+    decision = await limiter.allow(identifier)
+    return finalize_or_429(request,decision,limit,{"Strategy":"Fixed Window","limit":limit,"window":window})
