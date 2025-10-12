@@ -113,26 +113,34 @@ class SlidingLogLimiter:
     
     async def allow(self,identifier:str) -> Decision:
         key = self._key(identifier)
+        print("Key:", key)
         now = _now()
         window_start = now - self.window
-        
+        print("Now:", now, "Window Start:", window_start)
         pipe = self.r.pipeline()
         pipe.zremrangebyscore(key,0,window_start)
         pipe.zcard(key)
         res = await pipe.execute()
+        print("Pipeline Result:", res[0])
         count = int(res[1])
+        print("Count:", count)
 
         if count < self.limit:
             await self.r.zadd(key,{str(now):now})
             await self.r.expire(key,self.window)
             remaining = self.limit - (count + 1)
+            print("Allowed:", count + 1, "Remaining:", remaining)
             earliest = await self.r.zrange(key,0,0,withscores=True)
+            print("Earliest:", earliest)
             reset_in = 0.0 if not earliest else max(0.0,self.window - (now - earliest[0][1]))
-            return Decision(True,remaining,reset_in)
+            print("Reset In:", reset_in)
+            return Decision(allowed=True,remaining=remaining,reset_in=reset_in)
         else:
             earliest = await self.r.zrange(key,0,0,withscores=True)
+            print("Earliest:", earliest)
             reset_in = 0.0 if not earliest else max(0.0,self.window - (now - earliest[0][1]))
-            return Decision(False,0,reset_in)
+            print("Denied:", count, "Reset In:", reset_in)
+            return Decision(allowed=False,remaining=0,reset_in=reset_in)
 
 
 
@@ -162,7 +170,7 @@ def meta():
         "endpoints": {
             "whoami": "/whoami",
             "fixed": "/fixed?limit=10&window=60",
-            # "sliding_log": "/sliding-log?limit=10&window=60",
+            "sliding_log": "/sliding-log?limit=10&window=60",
             # "sliding_counter": "/sliding-counter?limit=10&window=60",
             # "token_bucket": "/token-bucket?capacity=10&refill_rate=2.0",
             # "leaky_bucket": "/leaky-bucket?capacity=10&leak_rate=2.0",
@@ -189,3 +197,12 @@ async def fixed(request:Request,limit:int=Query(10,ge=1,le=100),window:int=Query
     identifier = client_identifier(request)
     decision = await limiter.allow(identifier)
     return finalize_or_429(request,decision,limit,{"Strategy":"Fixed Window","limit":limit,"window":window})
+
+
+@app.get("/sliding_log",tags=["sliding"])
+async def sliding_log(request:Request,limit:int=Query(10,ge=1,le=100),window:int=Query(60,ge=1,le=3600)):
+    r = await get_redis()
+    limiter = SlidingLogLimiter(r,limit,window)
+    identifier = client_identifier(request)
+    decision = await limiter.allow(identifier)
+    return finalize_or_429(request,decision,limit,{"Strategy":"Sliding Log","limit":limit,"window":window})
