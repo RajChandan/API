@@ -99,6 +99,43 @@ class FixedWindowLimiter:
 
 
 
+class SlidingLogLimiter:
+
+    def __init__(self,r:redis.Redis,limit:int,window_seconds:int,prefix:str="rl:sl"):
+        self.r = r
+        self.limit = limit
+        self.window = window_seconds
+        self.prefix = prefix
+
+    
+    def _key(self,identifier:str) -> str:
+        return f"{self.prefix}:{identifier}"
+    
+    async def allow(self,identifier:str) -> Decision:
+        key = self._key(identifier)
+        now = _now()
+        window_start = now - self.window
+        
+        pipe = self.r.pipeline()
+        pipe.zremrangebyscore(key,0,window_start)
+        pipe.zcard(key)
+        res = await pipe.execute()
+        count = int(res[1])
+
+        if count < self.limit:
+            await self.r.zadd(key,{str(now):now})
+            await self.r.expire(key,self.window)
+            remaining = self.limit - (count + 1)
+            earliest = await self.r.zrange(key,0,0,withscores=True)
+            reset_in = 0.0 if not earliest else max(0.0,self.window - (now - earliest[0][1]))
+            return Decision(True,remaining,reset_in)
+        else:
+            earliest = await self.r.zrange(key,0,0,withscores=True)
+            reset_in = 0.0 if not earliest else max(0.0,self.window - (now - earliest[0][1]))
+            return Decision(False,0,reset_in)
+
+
+
 # --------------------
 # Fast API
 # --------------------
