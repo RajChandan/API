@@ -141,6 +141,14 @@ class SlidingLogLimiter:
             reset_in = 0.0 if not earliest else max(0.0,self.window - (now - earliest[0][1]))
             print("Denied:", count, "Reset In:", reset_in)
             return Decision(allowed=False,remaining=0,reset_in=reset_in)
+        
+
+class SlidingCounterLimiter:
+    def __init__(self,r:redis.Redis,limit:int,window_seconds:int,prefix:str="rl:sc"):
+        self.r = r
+        self.limit = limit
+        self.window = window_seconds
+        self.prefix = prefix
 
 
 
@@ -171,7 +179,7 @@ def meta():
             "whoami": "/whoami",
             "fixed": "/fixed?limit=10&window=60",
             "sliding_log": "/sliding-log?limit=10&window=60",
-            # "sliding_counter": "/sliding-counter?limit=10&window=60",
+            "sliding_counter": "/sliding-counter?limit=10&window=60",
             # "token_bucket": "/token-bucket?capacity=10&refill_rate=2.0",
             # "leaky_bucket": "/leaky-bucket?capacity=10&leak_rate=2.0",
         }
