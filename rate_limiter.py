@@ -260,3 +260,12 @@ async def sliding_log(request:Request,limit:int=Query(10,ge=1,le=100),window:int
     identifier = client_identifier(request)
     decision = await limiter.allow(identifier)
     return finalize_or_429(request,decision,limit,{"Strategy":"Sliding Log","limit":limit,"window":window})
+
+
+@app.get("/sliding_counter",tags=["sliding"])
+async def sliding_counter(request:Request,limit:int=Query(10,ge=1),window:int=Query(60,ge=1)):
+    r = await get_redis()
+    limiter = SlidingCounterLimiter(r,limit,window)
+    identifier = client_identifier(request)
+    decision = await limiter.allow(identifier)
+    return finalize_or_429(request,decision,limit,{"Strategy":"Sliding Counter","limit":limit,"window":window})
