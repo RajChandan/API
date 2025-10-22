@@ -151,6 +151,52 @@ class SlidingCounterLimiter:
         self.prefix = prefix
 
 
+    def _keys(self,identifier:str) -> tuple[str,str]:
+        now_win = int(_now() // self.window)
+        prev_key = f"{self.prefix}:{identifier}:{now_win - 1}"
+        curr_key = f"{self.prefix}:{identifier}:{now_win}"
+        return prev_key,curr_key
+    
+    async def allow(self,identifier:str) -> Decision:
+        prev_key,curr_key = self._keys(identifier)
+        print(f"Prev Key: {prev_key}, Curr Key: {curr_key}")
+        now = _now()
+        elapsed = now % self.window
+        print("Now:", now, "Elapsed:", elapsed)
+        weight_prev = (self.window - elapsed) // self.window
+        print("Weight Prev:", weight_prev)
+        pipe = self.r.pipeline()
+        pipe.get(prev_key)
+        pipe.get(curr_key)
+        prev_count_s,curr_count_s = await pipe.execute()
+        prev_cnt = int(prev_count_s) if prev_count_s else 0
+        curr_cnt = int(curr_count_s) if curr_count_s else 0
+        print("Prev Count:", prev_cnt, "Curr Count:", curr_cnt)
+
+        approx = prev_cnt * weight_prev + curr_cnt
+        print("Approximate Count:", approx)
+
+        if approx < self.limit:
+            pipe = self.r.pipeline()
+            pipe.incr(curr_key,1)
+            pipe.expire(curr_key,self.window * 2)
+            await pipe.execute()
+
+            curr_cnt = curr_cnt + 1
+            approx = prev_cnt * weight_prev + curr_cnt
+            remaining = self.limit - approx
+            print("Allowed:", approx, "Remaining:", remaining)
+            reset_in = self.window - elapsed
+            print("Reset In:", reset_in)
+            return Decision(allowed=True,remaining=int(remaining),reset_in=reset_in)
+        else:
+            reset_in = self.window - elapsed
+            print("Denied:", approx, "Reset In:", reset_in)
+            return Decision(allowed=False,remaining=0,reset_in=reset_in)
+
+
+
+
 
 # --------------------
 # Fast API
