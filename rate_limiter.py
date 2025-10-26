@@ -196,6 +196,32 @@ class SlidingCounterLimiter:
 
 
 
+class TokenBucketLimiter:
+    def __init__(self,r:redis.Redis,capacity:int,refill_rate:float,prefix:str="rl:tb"):
+        self.r = r
+        self.capacity = capacity
+        self.refill_rate = refill_rate
+        self.prefix = prefix
+
+    
+    def _key(self,identifier:str) -> str:
+        return f"{self.prefix}:{identifier}"
+    
+    async def allow(self,identifier:str) -> Decision:
+        key = self._key(identifier)
+        print(f"Key: {key}")
+        now = _now()
+        data = await self.r.hgetall(key)
+        print(f"Data: {data}")
+
+        if not data:
+            tokens = self.capacity - 1
+            await self.r.hset(key,mapping={"tokens":tokens,"ts":now})
+            await self.r.expire(key,int(max(2*self.capacity / max(self.refill_rate,0.001),60)))
+            print("Allowed: 1, Remaining:", tokens)
+            return Decision(allowed=True,remaining=int(tokens),reset_in=1.0/max(self.refill_rate,0.001))
+
+        
 
 
 # --------------------
