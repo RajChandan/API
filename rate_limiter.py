@@ -221,6 +221,27 @@ class TokenBucketLimiter:
             print("Allowed: 1, Remaining:", tokens)
             return Decision(allowed=True,remaining=int(tokens),reset_in=1.0/max(self.refill_rate,0.001))
 
+        tokens = float(data.get("tokens",self.capacity))
+        ts = float(data.get("ts",now))
+
+        delta = max(0.0,now - ts)
+
+        tokens = min(self.capacity,tokens + delta * self.refill_rate)
+        print("Refilled Tokens:", tokens)
+
+        if tokens >= 1.0:
+            tokens = tokens - 1.0
+            await self.r.hset(key,mapping={"tokens":tokens,"ts":now})
+            await self.r.expire(key,int(max(2*self.capacity / max(self.refill_rate,0.001),60)))
+            reset_in = 1.0 / max(self.refill_rate,0.001) if tokens < self.capacity else 0.0
+            print("Allowed: 1, Remaining:", tokens, "Reset In:", reset_in)
+            return Decision(allowed=True,remaining=int(tokens),reset_in=reset_in)
+        else:
+            need = 1.0 - tokens
+            reset_in = need /max(self.refill_rate,0.001)
+            print("Denied: 0, Remaining:", tokens, "Reset In:", reset_in)
+            await self.r.hset(key,mapping={"tokens":tokens,"ts":now})
+            return Decision(allowed=False,remaining=int(tokens),reset_in=reset_in)
         
 
 
