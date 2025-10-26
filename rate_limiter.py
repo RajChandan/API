@@ -273,7 +273,7 @@ def meta():
             "fixed": "/fixed?limit=10&window=60",
             "sliding_log": "/sliding-log?limit=10&window=60",
             "sliding_counter": "/sliding-counter?limit=10&window=60",
-            # "token_bucket": "/token-bucket?capacity=10&refill_rate=2.0",
+            "token_bucket": "/token-bucket?capacity=10&refill_rate=2.0",
             # "leaky_bucket": "/leaky-bucket?capacity=10&leak_rate=2.0",
         }
     }
@@ -316,3 +316,11 @@ async def sliding_counter(request:Request,limit:int=Query(10,ge=1),window:int=Qu
     identifier = client_identifier(request)
     decision = await limiter.allow(identifier)
     return finalize_or_429(request,decision,limit,{"Strategy":"Sliding Counter","limit":limit,"window":window})
+
+@app.get("/token_bucket",tags=["Bucket"])
+async def token_bucket(request:Request,capacity:int=Query(10,ge=1),refill_rate:float=Query(1.0,gt=0.0)):
+    r = await get_redis()
+    limiter = TokenBucketLimiter(r,capacity,refill_rate)
+    identifier = client_identifier(request)
+    decision = await limiter.allow(identifier)
+    return finalize_or_429(request,decision,capacity,{"Strategy":"Token Bucket","capacity":capacity,"refill_rate":refill_rate})
