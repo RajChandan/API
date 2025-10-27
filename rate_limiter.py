@@ -268,7 +268,8 @@ class LeakyBucketLimiter:
             await self.r.expire(key,3600)
             remaining = self.capacity -  level
             print("Allowed: 1, Remaining:", remaining)
-            return Decision(allowd=True,remaining=int(remaining),reset_in=level / max(self.leak_rate,0.001))
+            reset_in=level / max(self.leak_rate,0.001)
+            return Decision(allowed=True,remaining=int(remaining),reset_in=reset_in)
 
         level = float(data.get("level",0.0))
         ts = float(data.get("ts",now))
@@ -283,7 +284,8 @@ class LeakyBucketLimiter:
             await self.r.expire(key,3600)
             remaining = self.capacity - level
             print("Allowed: 1, Remaining:", remaining)
-            return Decision(allowed=True,remaining=int(remaining),reset_in=level / max(self.leak_rate,0.001))
+            reset_in=level / max(self.leak_rate,0.001)
+            return Decision(allowed=True,remaining=int(remaining),reset_in=reset_in)
 
         else:
             need = (level + 1.0) - self.capacity
@@ -295,7 +297,7 @@ class LeakyBucketLimiter:
 # --------------------
 # Fast API
 # --------------------
-
+                                                                                            
 app = FastAPI(title="Rate Limiter API",version="1.0.0")
 
 @app.middleware("http")
@@ -321,7 +323,7 @@ def meta():
             "sliding_log": "/sliding-log?limit=10&window=60",
             "sliding_counter": "/sliding-counter?limit=10&window=60",
             "token_bucket": "/token-bucket?capacity=10&refill_rate=2.0",
-            # "leaky_bucket": "/leaky-bucket?capacity=10&leak_rate=2.0",
+            "leaky_bucket": "/leaky-bucket?capacity=10&leak_rate=2.0",
         }
     }
 
@@ -371,3 +373,11 @@ async def token_bucket(request:Request,capacity:int=Query(10,ge=1),refill_rate:f
     identifier = client_identifier(request)
     decision = await limiter.allow(identifier)
     return finalize_or_429(request,decision,capacity,{"Strategy":"Token Bucket","capacity":capacity,"refill_rate":refill_rate})
+
+@app.get("/leaky_bucket",tags=["Bucket"])
+async def leaky_bucket(request:Request,capacity:int=Query(10,ge=1),leak_rate:float=Query(2.0,ge=0.0)):
+    r = await get_redis()
+    limiter = LeakyBucketLimiter(r,capacity,leak_rate)
+    identifier = client_identifier(request)
+    decision = await limiter.allow(identifier)
+    return finalize_or_429(request,decision,capacity,{"Strategy":"Leaky Bucket","capacity":capacity,"leak_rate":leak_rate})
