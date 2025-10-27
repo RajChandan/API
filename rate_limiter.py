@@ -245,6 +245,53 @@ class TokenBucketLimiter:
         
 
 
+class LeakyBucketLimiter:
+    def __init__(self,r:redis.Redis,capacity:int,leak_rate:float,prefix:str="rl:lb"):
+        self.r = r
+        self.capacity = capacity
+        self.leak_rate = leak_rate
+        self.prefix = prefix
+
+    
+    def _key(self,identifier:str) -> str:
+        return f"{self.prefix}:{identifier}"
+    
+    async def allow(self,identifier:str) -> Decision:
+        key = self._key(identifier)
+        print(f"Key: {key}")
+        now = _now()
+        data = await self.r.hgetall(key)
+        print(f"Data: {data}")
+        if not data:
+            level = 1.0
+            await self.r.hset(key,mapping={"level":level,"ts":now})
+            await self.r.expire(key,3600)
+            remaining = self.capacity -  level
+            print("Allowed: 1, Remaining:", remaining)
+            return Decision(allowd=True,remaining=int(remaining),reset_in=level / max(self.leak_rate,0.001))
+
+        level = float(data.get("level",0.0))
+        ts = float(data.get("ts",now))
+        delta = max(0.0,now - ts)
+        leaked = delta * self.leak_rate
+        level = max(0.0,level - leaked)
+
+        print("Level after leaked :", level)
+        if (level + 1.0) <=self.capacity:
+            level = level + 1.0
+            await self.r.hset(key,mapping={"level":level,"ts":now})
+            await self.r.expire(key,3600)
+            remaining = self.capacity - level
+            print("Allowed: 1, Remaining:", remaining)
+            return Decision(allowed=True,remaining=int(remaining),reset_in=level / max(self.leak_rate,0.001))
+
+        else:
+            need = (level + 1.0) - self.capacity
+            reset_in = need / max(self.leak_rate,0.001)
+            print("Denied: 0, Remaining:", self.capacity - level, "Reset In:", reset_in)
+            await self.r.hset(key,mapping={"level":level,"ts":now})
+            return Decision(allowed=False,remaining=int(self.capacity - level),reset_in=reset_in)
+
 # --------------------
 # Fast API
 # --------------------
