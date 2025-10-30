@@ -1,22 +1,22 @@
-# Rate Limiter API
+# 🚦 Rate Limiter API
 
 This project implements various **rate-limiting strategies** using FastAPI and Redis. Rate limiting is a technique used to control the number of requests a client can make to an API within a specific time window. The API supports multiple rate-limiting algorithms, including **Fixed Window**, **Sliding Log**, **Sliding Counter**, **Token Bucket**, and **Leaky Bucket**.
 
 ---
 
-## Features
+## ✨ Features
 
-- **Fixed Window Rate Limiter**: Simple counter-based rate limiting for fixed time windows.
-- **Sliding Log Rate Limiter**: Tracks individual request timestamps for precise rate limiting.
-- **Sliding Counter Rate Limiter**: Approximates sliding windows using weighted counters.
-- **Token Bucket Rate Limiter**: Allows bursts of requests with a refill rate.
-- **Leaky Bucket Rate Limiter**: Smooths out request bursts by "leaking" requests at a fixed rate.
-- **Redis Integration**: Uses Redis as the backend for efficient request tracking.
-- **Customizable**: Configure limits, time windows, refill rates, and leak rates via query parameters.
+- 🕒 **Fixed Window Rate Limiter**: Simple counter-based rate limiting for fixed time windows.
+- 📜 **Sliding Log Rate Limiter**: Tracks individual request timestamps for precise rate limiting.
+- 📊 **Sliding Counter Rate Limiter**: Approximates sliding windows using weighted counters.
+- 🪣 **Token Bucket Rate Limiter**: Allows bursts of requests with a refill rate.
+- 🚰 **Leaky Bucket Rate Limiter**: Smooths out request bursts by "leaking" requests at a fixed rate.
+- 🛠️ **Redis Integration**: Uses Redis as the backend for efficient request tracking.
+- ⚙️ **Customizable**: Configure limits, time windows, refill rates, and leak rates via query parameters.
 
 ---
 
-## Endpoints
+## 🌐 Endpoints
 
 ### 1. **Meta Endpoints**
 
