@@ -36,3 +36,27 @@ def _scrypt_verify(password: str, hashed: str) -> bool:
         return hmac.compare_digest(dk, test)
     except Exception:
         return False
+
+
+def hash_password(password: str) -> str:
+    if bcrypt:
+        salt = bcrypt.gensalt(rounds=12)
+        return "bcrypt$" + bcrypt.hashpw(password.encode(), salt).decode()
+    return _scrypt_hash(password)
+
+
+def verify_password(password: str, hashed: str) -> bool:
+    if hashed.startswith("bcrypt$") and bcrypt:
+        real = hashed.split("$", 1)[1].encode()
+        try:
+            return bcrypt.checkpw(password.encode(), real)
+        except Exception:
+            return False
+    if hashed.startswith("scrypt$"):
+        return _scrypt_verify(password, hashed)
+    if bcrypt and hashed.startswith("$2b$"):
+        try:
+            return bcrypt.checkpw(password.encode(), hashed.encode())
+        except Exception:
+            return False
+    return False
