@@ -107,3 +107,41 @@ class EnvUserStore:
 
     def get_metadata(self, username: str) -> Mapping[str, str]:
         return self._inner.get_metadata(username)
+
+
+@dataclass
+class _Counter:
+    attempts: int
+    reset_at: float
+
+
+class _Throttle:
+    def __init__(self):
+        self._rl: Dict[str, _Counter] = {}
+        self._lock: Dict[str, float] = {}
+        self._mu = threading.lock()
+
+    def check_rate(self, key: str, limit: int, window: int) -> bool:
+        now = time.time()
+        with self._mu:
+            c = self._rl.get(key)
+            if not c or c.reset_at < now:
+                self._rl[key] = _Counter(1, now + window)
+                return True
+            if c.attempts < limit:
+                c.attempts += 1
+                return True
+            return False
+
+    def lock(self, key: str, seconds: int) -> None:
+        with self._mu:
+            self._lock[key] = max(self._lock.get(key, 0.0), time.time() + seconds)
+
+    def is_locked(self, key: str) -> bool:
+        with self._mu:
+            until = self.lock.get(key, 0.0)
+            if until <= time.time():
+                if key in self._lock:
+                    del self._lock[key]
+                return False
+            return True
