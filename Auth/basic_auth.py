@@ -60,3 +60,50 @@ def verify_password(password: str, hashed: str) -> bool:
         except Exception:
             return False
     return False
+
+
+class UserStore(Protocol):
+    def get_hash(self, username: str) -> Optional[str]: ...
+
+    def get_metadata(self, username: str) -> Mapping[str, str]:
+        return {}
+
+
+class InMemoryUserStore:
+    def __init__(
+        self, users: Mapping[str, str] | Mapping[str, Tuple[str, Mapping[str, str]]]
+    ):
+        self._hashes = Dict[str, str] = {}
+        self._meta = Dict[str, Mapping[str, str]] = {}
+
+        for u, v in users.items():
+            if isinstance(v, tuple):
+                h, meta = v
+                self._hashes[u] = h
+                self._meta[u] = meta
+            else:
+                self._hashes[u] = v
+
+    def get_hash(self, username: str) -> Optional[str]:
+        return self._hashes.get(username)
+
+    def get_metadata(self, username: str) -> Mapping[str, str]:
+        return self._meta.get(username, {})
+
+
+class EnvUserStore:
+    def __init__(self, var_name: str = "Basic_Auth"):
+        raw = os.getenv(var_name, "")
+        users: Dict[str, str] = {}
+        if raw:
+            for pair in raw.split(","):
+                if ":" in pair:
+                    u, h = pair.split(":", 1)
+                    users[u.strip()] = h.strip()
+        self._inner = InMemoryUserStore(users)
+
+    def get_hash(self, username: str) -> Optional[str]:
+        return self._inner.get_hash(username)
+
+    def get_metadata(self, username: str) -> Mapping[str, str]:
+        return self._inner.get_metadata(username)
