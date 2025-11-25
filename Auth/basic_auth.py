@@ -145,3 +145,33 @@ class _Throttle:
                     del self._lock[key]
                 return False
             return True
+
+
+class BasicAuth:
+    def __init__(
+        self,
+        *,
+        realm: str = "Restricted",
+        user_store: UserStore,
+        require_https: bool = True,
+        allow_plain_http_from_localhost: bool = True,
+        ip_allowlist: Optional[Iterable[str]] = None,
+        ip_blocklist: Optional[Iterable[str]] = None,
+        rate_limit_attempts: int = 20,
+        rate_limit_window_seconds: int = 60,
+        lockout_after_attempts: int = 5,
+        lockout_seconds: int = 15 * 60,
+        logger: Optional[callable] = None
+    ) -> None:
+        self.realm = realm
+        self.user_store = user_store
+        self.require_https = require_https
+        self.allow_plain_http_from_localhost = allow_plain_http_from_localhost
+        self.rate_limit_attempts = rate_limit_attempts
+        self.rate_limit_window_seconds = rate_limit_window_seconds
+        self.lockout_after_attempts = lockout_after_attempts
+        self.lockout_seconds = lockout_seconds
+        self.logger = logger
+        self._throttle = _Throttle()
+        self._ip_allow: Set[ipaddress._BaseNetwork] = set()
+        self._ip_block: Set[ipaddress._BaseNetwork] = set()
