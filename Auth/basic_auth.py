@@ -280,3 +280,136 @@ class BasicAuth:
             password=password or "",
             is_https=is_https,
         )
+
+
+class BasicAuthMiddleware:
+    def __init__(
+        self,
+        app,
+        *,
+        authenticator: BasicAuth,
+        protected_prefix: str = "/",
+        exempt_path: Optional[Iterable[str]] = None,
+    ):
+        self.app = app
+        self.authenticator = authenticator
+        self.prefix = protected_prefix.rstrip("/") or "/"
+        self.exempt: Set[str] = set(exempt_path or [])
+
+    async def __call__(self, scope, recieve, send):
+        if scope["type"] != "http":
+            return await self.app(scope, recieve, send)
+
+        path = scope.get("path", "")
+        if any(path == e or path.startswith(e.rstrip("/") + "/") for e in self.exempt):
+            return await self.app(scope, recieve, send)
+
+        if (
+            self.prefix == "/"
+            or path == self.prefix
+            or path.startswith(self.prefix + "/")
+        ):
+            headers = {
+                k.decode().lower(): v.decode() for k, v in scope.get("headers", [])
+            }
+            client_ip = (scope.get("client") or (None,))[0] or "0.0.0.0"
+            xff = headers.get("x-forwarded-for")
+            if xff:
+                client_ip = xff.split(",")[0].strip()
+            is_https = (
+                scope.get("scheme") == "https"
+                or headers.get("x-forwarded-proto") == "https"
+            )
+
+            auth = headers.get("authorization")
+            if not auth or not auth.startswith("Basic"):
+                headers_out = [
+                    (
+                        b"www-authenticate",
+                        f'Basic realm="{self.authenticator.realm}", charset="UTF-8"'.encode(),
+                    )
+                ]
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 401,
+                        "headers": headers_out,
+                    }
+                )
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": b"Unauthorized",
+                        "more_body": False,
+                    }
+                )
+                return
+            try:
+                raw = base64.b64decode(auth.split(" ", 1)[1]).decode("utf-8")
+                username, password = raw.split(":", 1)
+            except Exception:
+                headers_out = [
+                    (
+                        b"www-authenticate",
+                        f'Basic realm="{self.authenticator.realm}", charset="UTF-8"'.encode(),
+                    )
+                ]
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 401,
+                        "headers": headers_out,
+                    }
+                )
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": b"Unauthorized",
+                        "more_body": False,
+                    }
+                )
+                return
+
+            try:
+                self.authenticator._verify(
+                    scope_headers=headers,
+                    client_ip=client_ip,
+                    username=username or "",
+                    password=password or "",
+                    is_https=is_https,
+                )
+
+                return self.app(scope, recieve, send)
+            except HTTPException as exc:
+                headers_out = (
+                    [(k.decode(), v.decode()) for k, v in exc.headers.items()]
+                    if exc.headers
+                    else []
+                )
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": exc.status_code,
+                        "headers": headers_out,
+                    }
+                )
+                await send(
+                    {
+                        "type": "http.response.body",
+                        "body": b"Unauthorized",
+                        "more_body": False,
+                    }
+                )
+                return
+        return await self.app(scope, recieve, send)
+
+
+__all__ = [
+    "BasicAuth",
+    "BasicAuthMiddleware",
+    "UserStore",
+    "InMemoryUserStore",
+    "EnvUserStore",
+    "hash_password",
+    "verify_password",
+]
