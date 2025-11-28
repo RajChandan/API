@@ -161,7 +161,7 @@ class BasicAuth:
         rate_limit_window_seconds: int = 60,
         lockout_after_attempts: int = 5,
         lockout_seconds: int = 15 * 60,
-        logger: Optional[callable] = None
+        logger: Optional[callable] = None,
     ) -> None:
         self.realm = realm
         self.user_store = user_store
@@ -175,3 +175,108 @@ class BasicAuth:
         self._throttle = _Throttle()
         self._ip_allow: Set[ipaddress._BaseNetwork] = set()
         self._ip_block: Set[ipaddress._BaseNetwork] = set()
+
+        for lst, target in (
+            (ip_allowlist, self._ip_allow),
+            (ip_blocklist, self._ip_block),
+        ):
+            if lst:
+                for net in lst:
+                    target.add(ipaddress.ip_network(net, strict=False))
+        self._security = HTTPBasic(auto_error=False)
+
+    @staticmethod
+    def _client_ip_from_request(request: Request) -> str:
+        xff = request.headers.get("X-Forwarded-For")
+        if xff:
+            return xff.split(",")[0].strip()
+        return request.client.host if request.client else "0.0.0.0"
+
+    @staticmethod
+    def _is_https_request(request: Request) -> bool:
+        if request.url.scheme == "https":
+            return True
+        return request.headers.get("X-Forwarded-Proto") == "https"
+
+    def _ip_allowed(self, ip: str) -> bool:
+        ip = ipaddress.ip_address(ip)
+        if self._ip_allow and not any(ip in net for net in self._ip_allow):
+            return False
+        if self._ip_block and any(ip in net for net in self._ip_block):
+            return False
+        return True
+
+    def _unauthorized(self) -> HTTPException:
+        headers = {
+            "WWW-Authenticate": f"Basic realm={self.realm}",
+            "charset": "UTF-8",
+        }
+        return HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            details="Unauthorized",
+            headers=headers,
+        )
+
+    def _verify(
+        self,
+        *,
+        scope_headers: Mapping[str, str],
+        client_ip: str,
+        username: str,
+        password: str,
+        is_https: bool,
+    ) -> Mapping[str, str]:
+        if self.require_https and not is_https:
+            if not (
+                self.allow_plain_http_from_localhost
+                and client_ip in {"127.0.0.1", "::1"}
+            ):
+                raise self._unauthorized()
+
+        if not self._ip_allowed(client_ip):
+            raise self._unauthorized()
+
+        if not username or not password:
+            return self._unauthorized()
+
+        rl_key = f"rl:{client_ip}:{username}"
+        if not self._throttle.check_rate(
+            rl_key, self.rate_limit_attempts, self.rate_limit_window_seconds
+        ):
+            raise self._unauthorized()
+
+        lock_key = f"lock:{client_ip}:{username}"
+        if self._throttle.is_locked(lock_key):
+            raise self._unauthorized()
+
+        stored = self.user_store.get_hash(username)
+        if not stored or not verify_password(password, stored):
+            if self.lockout_after_attempts <= 1:
+                self._throttle.lock(lock_key, self.lockout_seconds)
+            raise self._unauthorized()
+
+        return {
+            "username": username,
+            "ip": client_ip,
+            "metadata": self.user_store.get_metadata(username),
+            "auth_scheme": "basic",
+            "realm": self.realm,
+        }
+
+    async def __call__(
+        self,
+        request: Request,
+        credentials: HTTPBasicCredentials = Depends(HTTPBasic(auto_error=False)),
+    ):
+        username = credentials.username if credentials else None
+        password = credentials.password if credentials else None
+        client_ip = self._client_ip_from_request(request)
+        is_https = self._is_https_request(request)
+        headers = {k.lower(): v for k, v in request.headers.items()}
+        return self._verify(
+            scope_headers=headers,
+            client_ip=client_ip,
+            username=username or "",
+            password=password or "",
+            is_https=is_https,
+        )
