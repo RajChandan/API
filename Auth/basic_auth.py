@@ -1,4 +1,4 @@
-from __future__ import annotation
+from __future__ import annotations
 import base64
 import hashlib
 import hmac
@@ -73,8 +73,8 @@ class InMemoryUserStore:
     def __init__(
         self, users: Mapping[str, str] | Mapping[str, Tuple[str, Mapping[str, str]]]
     ):
-        self._hashes = Dict[str, str] = {}
-        self._meta = Dict[str, Mapping[str, str]] = {}
+        self._hashes: Dict[str, str] = {}
+        self._meta: Dict[str, Mapping[str, str]] = {}
 
         for u, v in users.items():
             if isinstance(v, tuple):
@@ -119,7 +119,7 @@ class _Throttle:
     def __init__(self):
         self._rl: Dict[str, _Counter] = {}
         self._lock: Dict[str, float] = {}
-        self._mu = threading.lock()
+        self._mu = threading.Lock()
 
     def check_rate(self, key: str, limit: int, window: int) -> bool:
         now = time.time()
@@ -139,7 +139,7 @@ class _Throttle:
 
     def is_locked(self, key: str) -> bool:
         with self._mu:
-            until = self.lock.get(key, 0.0)
+            until = self._lock.get(key, 0.0)
             if until <= time.time():
                 if key in self._lock:
                     del self._lock[key]
@@ -184,10 +184,12 @@ class BasicAuth:
                 for net in lst:
                     target.add(ipaddress.ip_network(net, strict=False))
         self._security = HTTPBasic(auto_error=False)
+        print("BasicAuth initialized")
 
     @staticmethod
     def _client_ip_from_request(request: Request) -> str:
         xff = request.headers.get("X-Forwarded-For")
+        print(xff, " === XFF")
         if xff:
             return xff.split(",")[0].strip()
         return request.client.host if request.client else "0.0.0.0"
@@ -213,7 +215,7 @@ class BasicAuth:
         }
         return HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            details="Unauthorized",
+            detail="Unauthorized",
             headers=headers,
         )
 
@@ -226,6 +228,7 @@ class BasicAuth:
         password: str,
         is_https: bool,
     ) -> Mapping[str, str]:
+        print("Verifying Basic Auth")
         if self.require_https and not is_https:
             if not (
                 self.allow_plain_http_from_localhost
@@ -273,6 +276,7 @@ class BasicAuth:
         client_ip = self._client_ip_from_request(request)
         is_https = self._is_https_request(request)
         headers = {k.lower(): v for k, v in request.headers.items()}
+        print(headers, " === HEADERS")
         return self._verify(
             scope_headers=headers,
             client_ip=client_ip,
@@ -295,13 +299,16 @@ class BasicAuthMiddleware:
         self.authenticator = authenticator
         self.prefix = protected_prefix.rstrip("/") or "/"
         self.exempt: Set[str] = set(exempt_path or [])
+        print("BasicAUTH Middleware initialized")
 
     async def __call__(self, scope, recieve, send):
         if scope["type"] != "http":
+            print("Non-HTTP request, passing through")
             return await self.app(scope, recieve, send)
 
         path = scope.get("path", "")
         if any(path == e or path.startswith(e.rstrip("/") + "/") for e in self.exempt):
+            print(f"Path {path} is exempted, passing through")
             return await self.app(scope, recieve, send)
 
         if (
@@ -312,8 +319,10 @@ class BasicAuthMiddleware:
             headers = {
                 k.decode().lower(): v.decode() for k, v in scope.get("headers", [])
             }
+            print(headers, " === MIDDLEWARE HEADERS")
             client_ip = (scope.get("client") or (None,))[0] or "0.0.0.0"
             xff = headers.get("x-forwarded-for")
+            print(xff, " === XFF in Middleware")
             if xff:
                 client_ip = xff.split(",")[0].strip()
             is_https = (
@@ -322,6 +331,7 @@ class BasicAuthMiddleware:
             )
 
             auth = headers.get("authorization")
+            print(auth, " === Authorization Header")
             if not auth or not auth.startswith("Basic"):
                 headers_out = [
                     (
