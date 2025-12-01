@@ -392,7 +392,7 @@ class BasicAuthMiddleware:
                 return self.app(scope, recieve, send)
             except HTTPException as exc:
                 headers_out = (
-                    [(k.decode(), v.decode()) for k, v in exc.headers.items()]
+                    [(k.encode(), v.encode()) for k, v in exc.headers.items()]
                     if exc.headers
                     else []
                 )
