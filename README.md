@@ -1,36 +1,96 @@
-# 🚦 Rate Limiter API
+## Introduction 📖
 
-This project implements various **rate-limiting strategies** using FastAPI and Redis. Rate limiting is a technique used to control the number of requests a client can make to an API within a specific time window. The API supports multiple rate-limiting algorithms, including **Fixed Window**, **Sliding Log**, **Sliding Counter**, **Token Bucket**, and **Leaky Bucket**.
+This project is a FastAPI-based application that implements authentication and rate-limiting strategies. It provides secure access to endpoints using Basic Authentication and ensures fair usage of resources through various rate-limiting techniques.
 
----
+## Features ✨
 
-## ✨ Features
+- **Basic Authentication** 🔒: Secure endpoints using HTTP Basic Authentication.
+- **Rate Limiting** ⏳: Implemented multiple strategies to control API usage:
+  - Fixed Window 🪟
+  - Sliding Log 📜
+  - Sliding Counter 🔢
+  - Token Bucket 🪣
+  - Leaky Bucket 💧
+- **Middleware** 🛡️: Custom middleware for authentication and rate limiting.
+- **Dependency Injection** 🧩: Utilizes FastAPI's `Depends` for injecting dependencies.
 
-- 🕒 **Fixed Window Rate Limiter**: Simple counter-based rate limiting for fixed time windows.
-- 📜 **Sliding Log Rate Limiter**: Tracks individual request timestamps for precise rate limiting.
-- 📊 **Sliding Counter Rate Limiter**: Approximates sliding windows using weighted counters.
-- 🪣 **Token Bucket Rate Limiter**: Allows bursts of requests with a refill rate.
-- 🚰 **Leaky Bucket Rate Limiter**: Smooths out request bursts by "leaking" requests at a fixed rate.
-- 🛠️ **Redis Integration**: Uses Redis as the backend for efficient request tracking.
-- ⚙️ **Customizable**: Configure limits, time windows, refill rates, and leak rates via query parameters.
+## Endpoints 🌐
 
----
+### Authentication 🔑
 
-## 🌐 Endpoints
+- **`/admin`**: Protected endpoint that requires Basic Authentication.
 
-### 1. **Meta Endpoints**
+### Rate Limiting ⚙️
 
-- **`GET /`**: Provides metadata about the API and available rate-limiting strategies.
-- **`GET /whoami`**: Returns information about the client (IP, port, and API key).
+- All endpoints are rate-limited using one of the implemented strategies.
 
-### 2. **Rate Limiting Strategies**
+## Authentication 🔐
 
-| **Endpoint**           | **Description**                                            | **Query Parameters**                                                |
-| ---------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------- |
-| `GET /fixed`           | Implements the **Fixed Window** rate-limiting strategy.    | `limit` (max requests), `window` (time window in seconds).          |
-| `GET /sliding_log`     | Implements the **Sliding Log** rate-limiting strategy.     | `limit` (max requests), `window` (time window in seconds).          |
-| `GET /sliding_counter` | Implements the **Sliding Counter** rate-limiting strategy. | `limit` (max requests), `window` (time window in seconds).          |
-| `GET /token_bucket`    | Implements the **Token Bucket** rate-limiting strategy.    | `capacity` (bucket size), `refill_rate` (tokens added per second).  |
-| `GET /leaky_bucket`    | Implements the **Leaky Bucket** rate-limiting strategy.    | `capacity` (bucket size), `leak_rate` (requests leaked per second). |
+### Basic Authentication
 
----
+Basic Authentication is implemented using `BasicAuthMiddleware` and `BasicAuth` classes. The middleware validates credentials and sets the authenticated user in the request state.
+
+#### Example Usage 🛠️
+
+```python
+from fastapi import FastAPI, Depends
+from Auth.basic_auth_api import BasicAuth
+
+app = FastAPI()
+
+@app.get("/admin")
+async def admin_route(user: str = Depends(BasicAuth())):
+    return {"message": f"Welcome, {user}"}
+```
+
+## Rate Limiting Strategies 📊
+
+### Fixed Window 🪟
+
+Limits the number of requests within a fixed time window.
+
+### Sliding Log 📜
+
+Tracks request timestamps and allows requests based on a sliding time window.
+
+### Sliding Counter 🔢
+
+Maintains a counter that resets periodically, allowing requests within the sliding window.
+
+### Token Bucket 🪣
+
+Tokens are added to a bucket at a fixed rate, and requests consume tokens.
+
+### Leaky Bucket 💧
+
+Requests are processed at a fixed rate, and excess requests are queued or dropped.
+
+## Installation 🛠️
+
+Each file in this project is an independent FastAPI project. Follow the steps below to run any specific project:
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/RajChandan/API.git
+   ```
+2. Navigate to the project directory:
+   ```bash
+   cd API
+   ```
+3. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+4. Run the desired FastAPI project:
+
+   ```bash
+   uvicorn <filename>:app --reload
+   ```
+
+   Replace `<filename>` with the name of the file you want to run (e.g., `main`, `cookie`, `pagination`, etc.).
+
+5. Access the API documentation at `http://127.0.0.1:8000/docs`.
+
+## Contributing 🤝
+
+Contributions are welcome! Please fork the repository and create a pull request with your changes.
