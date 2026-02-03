@@ -25,3 +25,16 @@ def normalize_scopes(value: Any) -> List[str]:
 
     if isinstance(value, (list, tuple, set)):
         return [str(x).strip() for x in value if str(x).strip()]
+
+
+def normalize_roles(value: Any) -> List[str]:
+    if value is None:
+        return []
+
+    if isinstance(value, str):
+        return [r.strip() for r in value.split(",") if r.strip()]
+
+    if isinstance(value, (list, tuple, set)):
+        return [str(x).strip() for x in value if str(x).strip()]
+
+    return []
