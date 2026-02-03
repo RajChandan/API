@@ -14,3 +14,14 @@ def parse_bearer(authorization_header: Optional[str]) -> Optional[str]:
         return None
 
     return parts[1].strip()
+
+
+def normalize_scopes(value: Any) -> List[str]:
+    if value is None:
+        return []
+
+    if isinstance(value, str):
+        return [s for s in value.split() if s]
+
+    if isinstance(value, (list, tuple, set)):
+        return [str(x).strip() for x in value if str(x).strip()]
