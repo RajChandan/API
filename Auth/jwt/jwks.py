@@ -24,3 +24,32 @@ class JWKSClient:
         self.ttl_seconds = max(10, int(ttl_seconds))
         self.timeout_seconds = float(timeout_seconds)
         self._cache: Optional[_CacheEntry] = None
+
+    async def get_jwks(self, force_refresh: bool = False) -> Dict[str, Any]:
+        now = time.time()
+        if not force_refresh and self._cache and self._cache.expires_at > now:
+            return self._cache.jwks
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
+                resp = await client.get(
+                    self.jwks_url, headers={"Accept": "application/json"}
+                )
+                resp.raise_for_status()
+                jwks = resp.json()
+            if not isinstance(jwks, dict) or not isinstance(jwks.get("keys"), list):
+                raise AuthError(
+                    detail="Invalid JWKS response", status_code=401, code="jwks_invalid"
+                )
+        except (httpx.RequestError, httpx.HTTPStatusError) as e:
+            if (
+                self._cache
+                and isinstance(self._cache.jwks.get("keys"), list)
+                and self._cache.jwks["keys"]
+            ):
+                return self._cache.jwks
+            raise AuthError(
+                "Unable to fetch public keys", status_code=401, code="jwks_fetch_failed"
+            )
+        self._cache = _CacheEntry(jwks=jwks, expires_at=now + self.ttl_seconds)
+        return jwks
