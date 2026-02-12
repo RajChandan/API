@@ -53,3 +53,17 @@ class JWKSClient:
             )
         self._cache = _CacheEntry(jwks=jwks, expires_at=now + self.ttl_seconds)
         return jwks
+
+    @staticmethod
+    def find_key(jwks: Dict[str, Any], kid: Optional[str]) -> Optional[Dict[str, Any]]:
+        keys = jwks.get("keys") or []
+        if not keys:
+            return None
+
+        if not kid:
+            return keys[0] if len(keys) == 1 else None
+
+        for k in keys:
+            if k.get("kid") == kid:
+                return k
+        return None
