@@ -3,7 +3,7 @@ from typing import Any, Dict, Optional
 import base64, json, time
 
 from jose import jwt
-from jose.exceptions import JWTError, ExpiredSignatareError, JWTClaimsError
+from jose.exceptions import JWTError, ExpiredSignatureError, JWTClaimsError
 
 from .config import JWTAuthSetings
 from .errors import AuthError
@@ -63,3 +63,49 @@ async def verify_jwt(
 
     if not jwk:
         raise AuthError("Unknown signing key", status_code=401, code="key_not_found")
+
+    options = {
+        "verify_aud": bool(settings.audience),
+        "verify_iss": bool(settings.issuer),
+        "verify_iat": bool(settings.verify_iat),
+    }
+
+    try:
+        payload = jwt.decode(
+            token,
+            jwk,
+            algorithms=list(settings.algorithms),
+            audience=settings.audience,
+            issuer=settings.issuer,
+            options=options,
+            leeway=settings.leeway_seconds,
+        )
+
+    except ExpiredSignatureError:
+        raise AuthError("Token Expired", status_code=401, code="token_expired")
+
+    except JWTClaimsError:
+        raise AuthError("Invalid token claims", status_code=401, code="invalid_claims")
+
+    except JWTError:
+        raise AuthError("Invalid token", status_code=401, code="token_invalid")
+
+    if settings.max_token_age_seconds is not None:
+        iat = payload.get("iat")
+        if not isinstance(iat, (int, float)):
+            raise AuthError("Invalid iat claim", status_code=401, code="invalid_iat")
+
+        if int(time.time()) - int(iat) > int(settings.max_token_age_seconds):
+            raise AuthError("Token is too old", status_code=401, code="token_too_old")
+
+        scopes = normalize_scopes(
+            payload.get(settings.scope_claim)
+        ) or normalize_scopes(payload.get(settings.alt_scope_claim))
+
+        roles = normalize_roles(payload.get(settings.roles_claim))
+
+        payload["_scopes"] = scopes
+        payload["_roles"] = roles
+
+        print(f"Token scopes: {scopes}, roles: {roles} , payload: {payload}")
+        return payload
