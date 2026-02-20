@@ -5,7 +5,7 @@ from typing import Optional, Tuple
 
 
 @dataclass(frozen=True)
-class JWTAuthSetings:
+class JWTAuthSettings:
     issuer: Optional[str] = None
     audience: Optional[str] = None
     jwks_url: Optional[str] = None
@@ -52,7 +52,7 @@ class JWTAuthSetings:
         audience = os.getenv(prefix + "AUDIENCE")
         jwks_url = os.getenv(prefix + "JWKS_URL")
 
-        return JWTAuthSetings(
+        return JWTAuthSettings(
             issuer=issuer,
             audience=audience,
             jwks_url=jwks_url,
