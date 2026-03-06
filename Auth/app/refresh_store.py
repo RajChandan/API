@@ -37,3 +37,32 @@ class RefreshTokenStore:
         )
 
         return raw
+
+    def validate(self, raw_token: str) -> RefreshSession:
+        h = _hash_token(raw_token)
+        sess = self._store.get(h)
+        if not sess:
+            raise ValueError("Invalid_Refresh")
+        if sess.revoked:
+            raise ValueError("Revoked_Refresh")
+        if sess.expires_at < int(time.time()):
+            raise ValueError("Expired_Refresh")
+
+        return sess
+
+    def rotate(self, raw_token: str, ttl_seconds: int) -> str:
+        sess = self.validate(raw_token)
+        old_h = _hash_token(raw_token)
+        sess.revoked = True
+
+        new_raw = self.mint(sess.user_id, ttl_seconds=ttl_seconds)
+        print(
+            f"Rotating refresh token for user_id={sess.user_id}, old_hash={old_h}, new_raw={new_raw}"
+        )
+        return new_raw
+
+    def revoke(self, raw_token: str) -> None:
+        h = _hash_token(raw_token)
+        sess = self._store.get(h)
+        if sess:
+            sess.revoked = True
