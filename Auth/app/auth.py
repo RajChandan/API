@@ -86,6 +86,7 @@ def _create_access_jwt(user_id: str, roles: List[str], scopes: List[str]) -> str
 @router.post("/login", response_model=TokenOut)
 def login(body: LoginIn):
     user = fake_users.get(body.username)
+
     if not user or not pwd.verify(body.password, user["hashed_password"]):
         raise HTTPException(status_code=401, detail="Invalid Credentials")
 
