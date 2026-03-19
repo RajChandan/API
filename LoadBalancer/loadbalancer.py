@@ -61,3 +61,73 @@ HOP_BY_HOP_HEADERS = {
     "upgrade",
     "host",
 }
+
+
+def filter_headers(headers) -> Dict[str, str]:
+    return {
+        key: value
+        for key, value in headers.items()
+        if key.lower() not in HOP_BY_HOP_HEADERS
+    }
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    task = asyncio.create_task(health_check_loop())
+    app.state.health_task = task
+    yield
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+app = FastAPI(title="Load Balancer", version="1.0.0", lifespan=lifespan)
+
+
+@app.get("/lb/health")
+async def lb_health() -> Response:
+    return {"load_balancer": "healthy", "backends": backend_status}
+
+
+@app.api_route("/{full_path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])
+async def proxy(full_path: str, request: Request) -> Response:
+    backend = await get_next_backend()
+
+    if not backend:
+        return JSONResponse(
+            status_code=503, content={"error": "No healthy backends available"}
+        )
+
+    target_url = httpx.URL(url=f"{backend}/{full_path}", params=request.query_params)
+
+    try:
+        body = await request.body()
+        headers = filter_headers(request.headers)
+
+        async with httpx.AsyncClient(
+            follow_redirects=False, timeout=PROXY_TIMEOUT
+        ) as client:
+            upstream_response = await client.request(
+                method=request.method, url=target_url, headers=headers, content=body
+            )
+
+            response_headers = filter_headers(upstream_response.headers)
+
+            return Response(
+                content=upstream_response.content,
+                status_code=upstream_response.status_code,
+                headers=response_headers,
+                media_type=upstream_response.headers.get("content-type"),
+            )
+
+    except httpx.RequestError as exc:
+        return JSONResponse(
+            status_code=502,
+            content={
+                "error": "Failed to forward request",
+                "details": str(exc),
+                "backend": backend,
+            },
+        )
