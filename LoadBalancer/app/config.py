@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     def validate_timeouts(cls, value: float) -> float:
         if value <= 0:
             raise ValueError("Timeout Values must be greater that 0")
-        raise value
+        return value
 
 
 @lru_cache
