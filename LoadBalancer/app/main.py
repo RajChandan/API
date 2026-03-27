@@ -133,3 +133,24 @@ async def lifespan(app: FastAPI):
             }
         },
     )
+
+
+app = FastAPI(title=get_settings().app_name, lifespan=lifespan)
+app.add_middleware(RequestContextLoggingmiddleware)
+
+
+@app.get("/lb/health")
+async def lb_health(request: Request):
+    return {
+        "load_balancer": "healthy",
+        "backends": request.app.lb_state.backend_status,
+        "configure_backends": request.app.state.settings.backends,
+    }
+
+
+@app.api_route(
+    "/{full_path:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+)
+async def catch_all(request: Request):
+    return await proxy_request(request)
