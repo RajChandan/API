@@ -143,7 +143,7 @@ app.add_middleware(RequestContextLoggingmiddleware)
 async def lb_health(request: Request):
     return {
         "load_balancer": "healthy",
-        "backends": request.app.lb_state.backend_status,
+        "backends": request.app.state.lb_state.backend_status,
         "configure_backends": request.app.state.settings.backends,
     }
 
