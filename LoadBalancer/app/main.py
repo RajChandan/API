@@ -80,7 +80,12 @@ class RequestContextLoggingmiddleware(BaseHTTPMiddleware):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
-    configure_logging(settings.log_level)
+    configure_logging(
+        settings.log_level,
+        settings.log_file,
+        settings.log_max_bytes,
+        settings.log_backup_count,
+    )
 
     app.state.settings = settings
     app.state.lb_state = LoadBalancerState(backends=settings.backends)
