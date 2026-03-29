@@ -90,6 +90,30 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
     app.state.lb_state = LoadBalancerState(backends=settings.backends)
 
+    health_timeout = httpx.Timeout(
+        connect=settings.health_check_connect_timeout,
+        read=settings.health_check_read_timeout,
+        write=settings.health_check_write_timeout,
+        pool=settings.health_check_pool_timeout,
+    )
+
+    proxy_timeout = httpx.Timeout(
+        connect=settings.proxy_connect_timeout,
+        read=settings.proxy_read_timeout,
+        write=settings.proxy_write_timeout,
+        pool=settings.proxy_pool_timeout,
+    )
+
+    health_limits = httpx.Limits(
+        max_connections=settings.health_max_connections,
+        max_keepalive_connections=settings.health_max_keepalive_connections,
+    )
+
+    proxy_limits = httpx.Limits(
+        max_connections=settings.proxy_max_connections,
+        max_keepalive_connections=settings.proxy_max_keepalive_connections,
+    )
+
     logger.info(
         "Application startup initiated",
         extra={
@@ -98,15 +122,36 @@ async def lifespan(app: FastAPI):
                 "app_name": settings.app_name,
                 "log_level": settings.log_level,
                 "backends": settings.backends,
-                "proxy_timeout": settings.proxy_timeout,
-                "health_check_interval": settings.health_check_interval,
-                "health_check_timeout": settings.health_check_timeout,
+                "health_timeout": {
+                    "connect": settings.health_check_connect_timeout,
+                    "read": settings.health_check_read_timeout,
+                    "write": settings.health_check_write_timeout,
+                    "pool": settings.health_check_pool_timeout,
+                },
+                "proxy_timeout": {
+                    "connect": settings.proxy_connect_timeout,
+                    "read": settings.proxy_read_timeout,
+                    "write": settings.proxy_write_timeout,
+                    "pool": settings.proxy_pool_timeout,
+                },
+                "health_limits": {
+                    "max_connections": settings.health_max_connections,
+                    "max_keepalive_connections": settings.health_max_keepalive_connections,
+                },
+                "proxy_limits": {
+                    "max_connections": settings.proxy_max_connections,
+                    "max_keepalive_connections": settings.proxy_max_keepalive_connections,
+                },
             }
         },
     )
 
-    app.state.health_client = httpx.AsyncClient()
-    app.state.proxy_client = httpx.AsyncClient(timeout=settings.proxy_timeout)
+    app.state.health_client = httpx.AsyncClient(
+        timeout=health_timeout, limits=health_limits, follow_redirects=False
+    )
+    app.state.proxy_client = httpx.AsyncClient(
+        timeout=proxy_timeout, limits=proxy_limits, follow_redirects=False
+    )
 
     app.state.health_task = asyncio.create_task(health_check_loop(app))
 
