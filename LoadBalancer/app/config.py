@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     app_name: str = "Load Balancer"
     app_host: str = "0.0.0.0"
     app_port: int = 8080
+    log_level: str = "INFO"
+    log_file: str = "logs/app.log"
+    log_max_bytes: int = 5_000_000
+    log_backup_count: int = 5
 
     backends: List[str] = Field(
         default=[
@@ -21,8 +25,24 @@ class Settings(BaseSettings):
     )
 
     health_check_interval: int = 5
-    health_check_timeout: float = 2.0
-    proxy_timeout: float = 10.0
+
+    health_check_connect_timeout: float = 2.0
+    health_check_read_timeout: float = 2.0
+    health_check_write_timeout: float = 2.0
+    health_check_pool_timeout: float = 2.0
+
+    # health_check_timeout: float = 2.0
+
+    proxy_connect_timeout: float = 3.0
+    proxy_read_timeout: float = 10.0
+    proxy_write_timeout: float = 10.0
+    proxy_pool_timeout: float = 5.0
+
+    health_max_connections: int = 20
+    health_max_keepalive_connections: int = 10
+
+    proxy_max_connections: int = 200
+    proxy_max_keepalive_connections: int = 50
 
     @field_validator("backends")
     @classmethod
@@ -47,11 +67,34 @@ class Settings(BaseSettings):
             raise ValueError("health_check_interval must be greater than 0")
         return value
 
-    @field_validator("health_check_timeout", "proxy_timeout")
+    @field_validator(
+        "log_max_bytes",
+        "log_backup_count",
+        "health_max_connections",
+        "health_max_keepalive_connections",
+        "proxy_max_connections",
+        "proxy_max_keepalive_connections",
+    )
     @classmethod
     def validate_timeouts(cls, value: float) -> float:
         if value <= 0:
             raise ValueError("Timeout Values must be greater that 0")
+        return value
+
+    @field_validator("log_level")
+    @classmethod
+    def validate_log_level(cls, value: str) -> str:
+        allowed = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
+        upper = value.upper()
+        if upper not in allowed:
+            raise ValueError(f"log level must be in {allowed}")
+        return upper
+
+    @field_validator("log_max_bytes", "log_backup_count")
+    @classmethod
+    def validate_log_rotation(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("Must be greater that 0")
         return value
 
 
