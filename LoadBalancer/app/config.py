@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     )
 
     health_check_interval: int = 5
+    health_failure_threshold: int = 3
+    health_success_threshold: int = 2
+    passive_failure_threshold: int = 2
 
     health_check_connect_timeout: float = 2.0
     health_check_read_timeout: float = 2.0
@@ -74,6 +77,9 @@ class Settings(BaseSettings):
         "health_max_keepalive_connections",
         "proxy_max_connections",
         "proxy_max_keepalive_connections",
+        "health_failure_threshold",
+        "health_success_threshold",
+        "passive_failure_threshold",
     )
     @classmethod
     def validate_timeouts(cls, value: float) -> float:
