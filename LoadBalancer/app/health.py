@@ -27,40 +27,79 @@ async def health_check_loop(app):
             "extra_data": {
                 "event": "health_check_loop_started",
                 "interval_seconds": settings.health_check_interval,
-                "timeout_seconds": settings.health_check_timeout,
+                "failure_threshold": settings.health_failure_threshold,
+                "success_threshold": settings.health_success_threshold,
             }
         },
     )
 
     while True:
         for backend in settings.backends:
-            previous_state = lb_state.backend_status.get(backend, True)
-            is_healthy = await check_backend_health(
+            check_passed = await check_backend_health(
                 client=client,
                 backend=backend,
-                timeout=settings.health_check_timeout,
+                timeout=settings.health_check_read_timeout,
             )
 
-            lb_state.backend_status[backend] = is_healthy
+            async with lb_state.state_lock:
+                backend_state = lb_state.backend_states[backend]
+                previous_status = backend_state.healthy
 
-            if previous_state != is_healthy:
-                logger.info(
-                    "Health check loop started",
-                    extra={
-                        "extra_data": {
-                            "event": "health_check_loop_started",
-                            "interval_seconds": settings.health_check_interval,
-                            "timeout_seconds": settings.health_check_timeout,
-                        }
-                    },
-                )
+                if check_passed:
+                    backend_state.consecutive_failures = 0
+                    backend_state.passive_failures = 0
+                    backend_state.consecutive_successes += 1
+
+                    if not backend_state.healthy:
+                        if (
+                            backend_state.consecutive_successes
+                            >= settings.health_success_threshold
+                        ):
+                            backend_state.healthy = True
+                            logger.info(
+                                "Health check loop started",
+                                extra={
+                                    "extra_data": {
+                                        "event": "health_check_loop_started",
+                                        "interval_seconds": settings.health_check_interval,
+                                        "failure_threshold": settings.health_failure_threshold,
+                                        "success_threshold": settings.health_success_threshold,
+                                    }
+                                },
+                            )
+                else:
+                    backend_state.consecutive_successes = 0
+                    backend_state.consecutive_failures += 1
+
+                    if backend_state.healthy:
+                        if (
+                            backend_state.consecutive_failures
+                            >= settings.health_failure_threshold
+                        ):
+                            backend_state.healthy = False
+                            logger.error(
+                                "Backend marked unhealthy after active health check failures",
+                                extra={
+                                    "extra_data": {
+                                        "event": "backend_marked_unhealthy_active",
+                                        "backend": backend,
+                                        "previous_status": previous_status,
+                                        "current_status": backend_state.healthy,
+                                        "consecutive_failures": backend_state.consecutive_failures,
+                                    }
+                                },
+                            )
 
             logger.debug(
-                "Health check cycle completed",
+                "Health check state updated",
                 extra={
                     "extra_data": {
-                        "event": "health_check_cycle_completed",
-                        "backend_status": lb_state.backend_status.copy(),
+                        "event": "health_check_state_updated",
+                        "backend": backend,
+                        "healthy": backend_state.healthy,
+                        "consecutive_failures": backend_state.consecutive_failures,
+                        "consecutive_successes": backend_state.consecutive_successes,
+                        "passive_failures": backend_state.passive_failures,
                     }
                 },
             )
