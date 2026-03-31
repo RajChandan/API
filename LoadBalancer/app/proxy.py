@@ -37,7 +37,7 @@ async def get_next_backend(app) -> Optional[str]:
         healthy_backends = [
             backend
             for backend in lb_state.backends
-            if lb_state.backend_status.get(backend, False)
+            if lb_state.backend_states[backend].healthy
         ]
 
     if not healthy_backends:
@@ -46,7 +46,7 @@ async def get_next_backend(app) -> Optional[str]:
             extra={
                 "extra_data": {
                     "event": "no_healthy_backends",
-                    "backend_status": lb_state.backend_status.copy(),
+                    "backend_status": lb_state.get_backend_status_view(),
                 }
             },
         )
@@ -62,11 +62,43 @@ async def get_next_backend(app) -> Optional[str]:
         extra={
             "extra_data": {
                 "event": "healthy_backend_selection_failed",
-                "backend_status": lb_state.backend_status.copy(),
+                "backend_status": lb_state.get_backend_status_view(),
             }
         },
     )
     return None
+
+
+async def mark_backend_passive_failure(app, backend: str) -> None:
+    settings = app.state.settings
+    lb_state = app.state.lb_state
+
+    async with lb_state.state_lock:
+        backend_state = lb_state.backend_states[backend]
+        backend_state.passive_failures += 1
+        backend_state.consecutive_successes = 0
+
+        if backend_state.passive_failures >= settings.passive_failure_threshold:
+            if backend_state.healthy:
+                backend_state.healthy = False
+                logger.error(
+                    "Backend marked unhealthy after passive proxy failures",
+                    extra={
+                        "extra_data": {
+                            "event": "backend_marked_unhealthy_passive",
+                            "backend": backend,
+                            "passive_failures": backend_state.passive_failures,
+                            "threshold": settings.passive_failure_threshold,
+                        }
+                    },
+                )
+
+
+async def reset_backend_passive_failure(app, backend: str) -> None:
+    lb_state = app.state.lb_state
+    async with lb_state.state_lock:
+        backend_state = lb_state.backend_states[backend]
+        backend_state.passive_failures = 0
 
 
 async def proxy_request(request: Request):
@@ -110,24 +142,25 @@ async def proxy_request(request: Request):
             method=request.method, url=target_url, headers=headers, content=body
         )
 
+        await reset_backend_passive_failure(app, backend)
+
         duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
         response_headers = filter_headers(upstream_response.headers)
 
         logger.info(
-            "Proxying request to backend",
+            "Proxy request completed",
             extra={
                 "extra_data": {
-                    "event": "proxy_request_started",
+                    "event": "proxy_request_completed",
                     "request_id": request_id,
                     "method": request.method,
                     "path": request.url.path,
-                    "query": str(request.query_params),
                     "backend": backend,
-                    "client_ip": request.client.host if request.client else None,
+                    "status_code": upstream_response.status_code,
+                    "duration_ms": duration_ms,
                 }
             },
         )
-
         return Response(
             content=upstream_response.content,
             status_code=upstream_response.status_code,
@@ -137,6 +170,9 @@ async def proxy_request(request: Request):
 
     except httpx.RequestError as exc:
         duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
+
+        await mark_backend_passive_failure(app, backend)
+
         logger.exception(
             "Proxy request failed",
             extra={
