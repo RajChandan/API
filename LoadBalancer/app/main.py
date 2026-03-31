@@ -191,10 +191,20 @@ app.add_middleware(RequestContextLoggingmiddleware)
 
 @app.get("/lb/health")
 async def lb_health(request: Request):
+    lb_state = request.app.state.lb_state
+
     return {
         "load_balancer": "healthy",
-        "backends": request.app.state.lb_state.backend_status,
-        "configure_backends": request.app.state.settings.backends,
+        "configured_backends": request.app.state.settings.backends,
+        "backends": {
+            backend: {
+                "healthy": state.healthy,
+                "consecutive_failures": state.consecutive_failures,
+                "consecutive_successes": state.consecutive_successes,
+                "passive_failures": state.passive_failures,
+            }
+            for backend, state in lb_state.backend_states.items()
+        },
     }
 
 
