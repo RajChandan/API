@@ -47,6 +47,11 @@ class Settings(BaseSettings):
     proxy_max_connections: int = 200
     proxy_max_keepalive_connections: int = 50
 
+    retry_enabled: bool = True
+    retry_max_attempts: int = 2
+    retry_backoff_base_ms: int = 200
+    retry_on_methods: List[str] = Field(default=["GET", "HEAD", "OPTIONS"])
+
     @field_validator("backends")
     @classmethod
     def validate_backends(cls, value: List[str]) -> List[str]:
@@ -102,6 +107,30 @@ class Settings(BaseSettings):
         if value <= 0:
             raise ValueError("Must be greater that 0")
         return value
+
+    @field_validator("retry_max_attempts", "retry_backoff_base_ms")
+    @classmethod
+    def validate_retry_positive_ints(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("Retry value must be greater than 0")
+        return value
+
+    @field_validator("retry_on_methods")
+    @classmethod
+    def validate_retry_methods(cls, value: List[str]) -> List[str]:
+        if not value:
+            raise ValueError("retry_on_methods must have at least one HTTP method")
+        allowed = {"GET", "HEAD", "OPTIONS", "PUT", "DELETE"}
+        normalized = []
+
+        for method in value:
+            upper = method.upper().strip()
+            if upper not in allowed:
+                raise ValueError(
+                    f"Unsupported HTTP method '{method}' in retry_on_methods. Allowed: {allowed}"
+                )
+            normalized.append(upper)
+        return normalized
 
 
 @lru_cache
