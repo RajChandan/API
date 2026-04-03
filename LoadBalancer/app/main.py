@@ -6,13 +6,14 @@ import uuid
 from contextlib import asynccontextmanager
 
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import get_settings
 from app.health import health_check_loop
 from app.logging_config import configure_logging
+from app.metrics import REQUEST_COUNT, REQUEST_DURATION, render_metrics
 from app.proxy import proxy_request
 from app.state import LoadBalancerState
 
@@ -42,8 +43,20 @@ class RequestContextLoggingmiddleware(BaseHTTPMiddleware):
         )
         try:
             response = await call_next(request)
-            duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            duration_seconds = time.perf_counter() - start_time
+            duration_ms = round(() * 1000, 2)
             response.headers["X-Request_ID"] = request_id
+
+            REQUEST_COUNT.labels(
+                method=request.method,
+                path=request.url.path,
+                status_code=str(response.status_code),
+            ).inc()
+
+            REQUEST_DURATION.labels(
+                method=request.method, path=request.url.path
+            ).observe(duration_seconds)
+
             logger.info(
                 "Incoming request received",
                 extra={
@@ -61,7 +74,15 @@ class RequestContextLoggingmiddleware(BaseHTTPMiddleware):
             return response
 
         except Exception:
-            duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            duration_seconds = time.perf_counter() - start_time
+            duration_ms = round(duration_seconds * 1000, 2)
+
+            REQUEST_COUNT.labels(
+                method=request.method, path=request.url.path, status_code="500"
+            ).inc()
+            REQUEST_DURATION.labels(
+                method=request.method, path=request.url.path
+            ).observe(duration_seconds)
             logger.exception(
                 "Unhandled request error",
                 extra={
@@ -206,6 +227,12 @@ async def lb_health(request: Request):
             for backend, state in lb_state.backend_states.items()
         },
     }
+
+
+@app.get("/lb/metrics")
+async def lb_metrics():
+    content, content_type = render_metrics()
+    return Response(content=content, media_type=content_type)
 
 
 @app.api_route(
