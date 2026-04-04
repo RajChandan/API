@@ -1,9 +1,25 @@
 import asyncio
 import logging
 import httpx
-
+from app.metrics import (
+    BACKEND_HEALTH,
+    BACKEND_CONSECUTIVE_FAILURES,
+    BACKEND_CONSECUTIVE_SUCCESSES,
+    BACKEND_PASSIVE_FAILURES,
+)
 
 logger = logging.getLogger("load_balancer.health")
+
+
+def update_backend_metrics(backend: str, backend_state) -> None:
+    BACKEND_HEALTH.labels(backend=backend).set(1 if backend_state.healthy else 0)
+    BACKEND_CONSECUTIVE_FAILURES.labels(backend=backend).set(
+        backend_state.consecutive_failures
+    )
+    BACKEND_CONSECUTIVE_SUCCESSES.labels(backend=backend).set(
+        backend_state.consecutive_successes
+    )
+    BACKEND_PASSIVE_FAILURES.labels(backend=backend).set(backend_state.passive_failures)
 
 
 async def check_backend_health(
@@ -89,7 +105,7 @@ async def health_check_loop(app):
                                     }
                                 },
                             )
-
+            update_backend_metrics(backend, backend_state)
             logger.debug(
                 "Health check state updated",
                 extra={
