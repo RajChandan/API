@@ -7,6 +7,16 @@ import httpx
 from fastapi import Request
 from fastapi.responses import JSONResponse, Response
 
+from app.metrics import (
+    PROXY_RETRY_COUNT,
+    PROXY_FAILURE_COUNT,
+    NO_HEALTHY_BACKEND_COUNT,
+    BACKEND_HEALTH,
+    BACKEND_CONSECUTIVE_FAILURES,
+    BACKEND_CONSECUTIVE_SUCCESSES,
+    BACKEND_PASSIVE_FAILURES,
+)
+
 
 logger = logging.getLogger("load_balancer.proxy")
 
@@ -51,6 +61,17 @@ def calculate_backoff_seconds(base_ms: int, attempt_number: int) -> float:
     return (base_ms * (2 ** (attempt_number - 1))) / 1000.0
 
 
+def update_backend_metrics(backend: str, backend_state) -> None:
+    BACKEND_HEALTH.labels(backend=backend).set(1 if backend_state.healthy else 0)
+    BACKEND_CONSECUTIVE_FAILURES.labels(backend=backend).set(
+        backend_state.consecutive_failures
+    )
+    BACKEND_CONSECUTIVE_SUCCESSES.labels(backend=backend).set(
+        backend_state.consecutive_successes
+    )
+    BACKEND_PASSIVE_FAILURES.labels(backend=backend).set(backend_state.passive_failures)
+
+
 async def get_next_backend(app) -> Optional[str]:
     lb_state = app.state.lb_state
 
@@ -62,6 +83,7 @@ async def get_next_backend(app) -> Optional[str]:
         ]
 
     if not healthy_backends:
+        NO_HEALTHY_BACKEND_COUNT.inc()
         logger.error(
             "No healthy backends available",
             extra={
@@ -113,6 +135,7 @@ async def mark_backend_passive_failure(app, backend: str) -> None:
                         }
                     },
                 )
+        update_backend_metrics(backend, backend_state)
 
 
 async def reset_backend_passive_failure(app, backend: str) -> None:
