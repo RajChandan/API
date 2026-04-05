@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 
 import httpx
 from fastapi import FastAPI, Request, Response
-
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import get_settings
@@ -23,6 +23,36 @@ logger = logging.getLogger("load_balancer.main")
 
 class RequestContextLoggingmiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        lb_state = request.app.state.lb_state
+
+        async with lb_state.inflight_lock:
+            if lb_state.is_draining:
+                logger.warning(
+                    "Rejecting request because application is draining",
+                    extra={
+                        "extra_data": {
+                            "event": "request_rejected_draining",
+                            "method": request.method,
+                            "path": request.url.path,
+                            "query": str(request.query_params),
+                            "client_ip": (
+                                request.client.host if request.client else None
+                            ),
+                        }
+                    },
+                )
+                REQUEST_COUNT.labels(
+                    method=request.method, path=request.url.path, status_code="503"
+                ).inc()
+
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "error": "service is shutting down and not accepting new requests"
+                    },
+                )
+            lb_state.inflight_requests += 1
+
         request_id = str(uuid.uuid4())
         request.state.request_id = request_id
 
@@ -44,7 +74,7 @@ class RequestContextLoggingmiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
             duration_seconds = time.perf_counter() - start_time
-            duration_ms = round(() * 1000, 2)
+            duration_ms = round((duration_seconds) * 1000, 2)
             response.headers["X-Request_ID"] = request_id
 
             REQUEST_COUNT.labels(
@@ -96,6 +126,68 @@ class RequestContextLoggingmiddleware(BaseHTTPMiddleware):
                 },
             )
             raise
+        finally:
+            async with lb_state.inflight_lock:
+                lb_state.inflight_requests -= 1
+
+                logger.debug(
+                    "In-flight request count updated",
+                    extra={
+                        "extra_data": {
+                            "event": "inflight_request_count_updated",
+                            "inflight_requests": lb_state.inflight_requests,
+                        }
+                    },
+                )
+
+
+async def wait_for_inflight_requests(app: FastAPI) -> None:
+    settings = app.state.settings
+    lb_state = app.state.lb_state
+
+    start_time = time.perf_counter()
+
+    while True:
+        async with lb_state.inflight_lock:
+            inflight = lb_state.inflight_requests
+
+        if inflight == 0:
+            logger.info(
+                "All in-flight requests completed during shutdown drain",
+                extra={
+                    "extra_data": {
+                        "event": "shutdown_drain_completed",
+                        "inflight_requests": inflight,
+                    }
+                },
+            )
+            return
+
+        elapsed = time.perf_counter() - start_time
+        if elapsed >= settings.shutdown_drain_timeout_seconds:
+            logger.warning(
+                "Shutdown drain timeout reached with in-flight requests remaining",
+                extra={
+                    "extra_data": {
+                        "event": "shutdown_drain_timeout",
+                        "remaining_inflight_requests": inflight,
+                        "timeout_seconds": settings.shutdown_drain_timeout_seconds,
+                    }
+                },
+            )
+            return
+        logger.info(
+            "Waiting for in-flight requests to complete",
+            extra={
+                "extra_data": {
+                    "event": "shutdown_drain_waiting",
+                    "remaining_inflight_requests": inflight,
+                    "elapsed_seconds": round(elapsed, 2),
+                }
+            },
+        )
+
+        await asyncio.sleep(settings.shutdown_poll_interval_seconds)
 
 
 @asynccontextmanager
@@ -186,6 +278,8 @@ async def lifespan(app: FastAPI):
             }
         },
     )
+
+    await wait_for_inflight_requests(app)
 
     app.state.health_task.cancel()
     try:
