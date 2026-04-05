@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     retry_enabled: bool = True
     retry_max_attempts: int = 2
     retry_backoff_base_ms: int = 200
+
+    shutdown_drain_timeout_seconds: int = 30
+    shutdown_poll_interval_seconds: float = 0.5
+
     retry_on_methods: List[str] = Field(default=["GET", "HEAD", "OPTIONS"])
 
     @field_validator("backends")
@@ -131,6 +135,20 @@ class Settings(BaseSettings):
                 )
             normalized.append(upper)
         return normalized
+
+    @field_validator("shutdown_drain_timeout_seconds")
+    @classmethod
+    def validate_shutdown_timeout(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("shutdown_drain_timeout_seconds must be greater than 0")
+        return value
+
+    @field_validator("shutdown_poll_interval_seconds")
+    @classmethod
+    def validate_shutdown_poll_interval(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("shutdown_poll_interval_seconds must be greater than 0")
+        return value
 
 
 @lru_cache
