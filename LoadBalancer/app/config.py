@@ -24,6 +24,11 @@ class Settings(BaseSettings):
         ]
     )
 
+    trusted_proxies: List[str] = Field(default=["127.0.0.1", "::1"])
+    max_request_body_bites: int = 1_048_576
+    hide_server_header: bool = True
+    security_response_headers_enabled: bool = True
+
     health_check_interval: int = 5
     health_failure_threshold: int = 3
     health_success_threshold: int = 2
@@ -71,6 +76,11 @@ class Settings(BaseSettings):
                 )
             cleaned.append(backend)
         return cleaned
+
+    @field_validator("trusted_proxies")
+    @classmethod
+    def validate_trusted_proxies(cls, value: List[str]) -> List[str]:
+        return [item.strip() for item in value if item.strip()]
 
     @field_validator("health_check_interval")
     @classmethod
