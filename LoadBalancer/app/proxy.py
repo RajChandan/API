@@ -33,12 +33,55 @@ HOP_BY_HOP_HEADERS = {
 }
 
 
-def filter_headers(header) -> Dict[str, str]:
-    return {
-        key: value
-        for key, value in header.items()
-        if key.lower() not in HOP_BY_HOP_HEADERS
-    }
+SENSETIVE_HEADERS = {
+    "authorization",
+    "cookie",
+    "set-cookie",
+    "x-api-key",
+    "proxy-authorization",
+}
+
+
+def sanitize_headers_for_logging(headers) -> Dict[str, str]:
+    sanitized = {}
+    for key, value in headers.items():
+        if key.lower() in SENSETIVE_HEADERS:
+            sanitized[key] = "***REDACTED***"
+        else:
+            sanitized[key] = value
+    return sanitized
+
+
+def filter_request_headers(headers) -> Dict[str, str]:
+    filtered = {}
+    for key, value in headers.items():
+        lower_key = key.lower()
+        if lower_key in HOP_BY_HOP_HEADERS:
+            continue
+        if lower_key == "content-length":
+            continue
+        filtered[key] = value
+    return filtered
+
+
+def filter_response_headers(headers, hide_server_header: bool) -> Dict[str, str]:
+    filtered = {}
+    for key, value in headers.items():
+        lower_key = key.lower()
+        if lower_key in HOP_BY_HOP_HEADERS:
+            continue
+        if hide_server_header and lower_key == "server":
+            continue
+        filtered[key] = value
+    return filtered
+
+
+# def filter_headers(header) -> Dict[str, str]:
+#     return {
+#         key: value
+#         for key, value in header.items()
+#         if key.lower() not in HOP_BY_HOP_HEADERS
+#     }
 
 
 def is_retryable_method(method: str, retry_methods: list[str]) -> bool:
@@ -70,6 +113,31 @@ def update_backend_metrics(backend: str, backend_state) -> None:
         backend_state.consecutive_successes
     )
     BACKEND_PASSIVE_FAILURES.labels(backend=backend).set(backend_state.passive_failures)
+
+
+def get_safe_client_ip(request: Request) -> Optional[str]:
+    return request.headers.get("x-real-client-ip") or (
+        request.client.host if request.client else None
+    )
+
+
+def build_forward_headers(request: Request, client_ip: Optional[str]) -> Dict[str, str]:
+    headers = filter_request_headers(request.headers)
+
+    if client_ip:
+        existing_xff = request.headers.get("x-forwarded-for")
+        if existing_xff:
+            headers["X-Forwarded-For"] = f"{existing_xff},{client_ip}"
+        else:
+            headers["X-Forwarded-For"] = client_ip
+
+        headers["X-Real-IP"] = client_ip
+
+    headers["X-Forwarded-Proto"] = request.url.scheme
+    if request.headers.get("host"):
+        headers["X-Forwarded-Host"] = request.headers["host"]
+
+    return headers
 
 
 async def get_next_backend(app) -> Optional[str]:
@@ -150,6 +218,7 @@ async def proxy_request(request: Request):
     settings = app.state.settings
     proxy_client = app.state.proxy_client
     request_id = getattr(request.state, "request_id", None)
+    client_ip = getattr(request.state, "resolved_client_ip", None)
 
     retry_allowed = settings.retry_enabled and is_retryable_method(
         request.method, settings.retry_on_methods
@@ -157,7 +226,27 @@ async def proxy_request(request: Request):
     max_attempts = settings.retry_max_attempts if retry_allowed else 1
 
     body = await request.body()
-    headers = filter_headers(request.headers)
+
+    if len(body) > settings.max_request_body_bytes:
+        logger.warning(
+            "Request body too large",
+            extra={
+                "extra_data": {
+                    "event": "request_body_too_large",
+                    "request_id": request_id,
+                    "method": request.method,
+                    "path": request.url.path,
+                    "body_size_bytes": len(body),
+                    "max_allowed_bytes": settings.max_request_body_bytes,
+                    "client_ip": client_ip,
+                }
+            },
+        )
+        return JSONResponse(
+            status_code=413, content={"error": "Request body too large"}
+        )
+
+    headers = build_forward_headers(request, client_ip)
 
     last_exception = None
     last_backend = None
@@ -206,7 +295,10 @@ async def proxy_request(request: Request):
             await reset_backend_passive_failure(app, backend)
 
             duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
-            response_headers = filter_headers(upstream_response.headers)
+            response_headers = filter_response_headers(
+                upstream_response.headers,
+                hide_server_header=settings.hide_server_header,
+            )
 
             logger.info(
                 "Proxy request completed",
@@ -235,6 +327,12 @@ async def proxy_request(request: Request):
         except httpx.RequestError as exc:
             last_exception = exc
             await mark_backend_passive_failure(app, backend)
+            PROXY_FAILURE_COUNT.labels(
+                method=request.method,
+                path=request.url.path,
+                backend=backend,
+                error_type=exc.__class__.__name__,
+            ).inc()
 
             duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
             retryable_error = is_retryable_exception(exc)
@@ -261,6 +359,9 @@ async def proxy_request(request: Request):
             )
 
             if should_retry:
+                PROXY_RETRY_COUNT.labels(
+                    method=request.method, path=request.url.path, backend=backend
+                ).inc()
                 backoff_seconds = calculate_backoff_seconds(
                     settings.retry_backoff_base_ms,
                     attempt,
