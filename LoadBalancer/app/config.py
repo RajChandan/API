@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     hide_server_header: bool = True
     security_response_headers_enabled: bool = True
 
+    rate_limit_enabled: bool = True
+    rate_limit_requests: int = 100
+    rate_limit_window_seconds: int = 60
+    global_max_concurrent_requests: int = 200
+
     health_check_interval: int = 5
     health_failure_threshold: int = 3
     health_success_threshold: int = 2
@@ -99,6 +104,11 @@ class Settings(BaseSettings):
         "health_failure_threshold",
         "health_success_threshold",
         "passive_failure_threshold",
+        "retry_max_attempts",
+        "retry_backoff_base_ms",
+        "shutdown_drain_timeout_seconds",
+        "max_request_body_bytes",
+        "global_max_concurrent_requests",
     )
     @classmethod
     def validate_timeouts(cls, value: float) -> float:
