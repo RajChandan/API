@@ -79,9 +79,60 @@ def apply_security_headers(response: Response, enabled: bool) -> None:
     response.headers.setdefault("Cache-Control", "no-store")
 
 
+async def enforce_rate_limit(
+    request: Request, client_ip: str | None
+) -> tuple[bool, int | None]:
+    settings = request.app.state.settings
+    lb_state = request.app.state.lb_state
+
+    if not settings.rate_limit_enabled or not client_ip:
+        return True, None
+
+    now = time.time()
+    window_seconds = settings.rate_limit_window_seconds
+
+    async with lb_state.rate_limit_lock:
+        if now - lb_state.last_rate_limit_cleanup_ts >= window_seconds:
+            cutoff = now - window_seconds
+            lb_state.rate_limit_store = {
+                ip: entry
+                for ip, entry in lb_state.rate_limit_store.items()
+                if entry.window_start >= cutoff
+            }
+            lb_state.last_rate_limit_cleanup_ts = now
+            RATE_LIMIT_TRACKED_CLIENTS.set(len(lb_state.rate_limit_store))
+
+        entry = lb_state.rate_limit_store.get(client_ip)
+
+        if entry is None:
+            entry = RateLimitEntry(window_start=now, count=1)
+            lb_state.rate_limit_store[client_ip] = entry
+            RATE_LIMIT_TRACKED_CLIENTS.set(len(lb_state.rate_limit_store))
+            return True, settings.rate_limit_requests - 1
+
+        if now - entry.window_start >= window_seconds:
+            entry.window_start = now
+            entry.count = 1
+            return True, settings.rate_limit_requests - 1
+
+        if entry.count >= settings.rate_limit_requests:
+            remaining_window = int(max(1, window_seconds - (now - entry.window_start)))
+            return False, remaining_window
+
+        entry.count += 1
+        return True, settings.rate_limit_requests - entry.count
+
+
 class RequestContextLoggingmiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         lb_state = request.app.state.lb_state
+        settings = request.app.state.settings
+
+        request_id = str(uuid.uuid4())
+        request.state.request_id = request_id
+        request.state.resolved_client_ip = resolve_client_ip(
+            request, settings.trusted_proxies
+        )
 
         async with lb_state.inflight_lock:
             if lb_state.is_draining:
