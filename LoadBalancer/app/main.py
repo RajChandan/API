@@ -13,12 +13,70 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from app.config import get_settings
 from app.health import health_check_loop
 from app.logging_config import configure_logging
-from app.metrics import REQUEST_COUNT, REQUEST_DURATION, render_metrics
+from app.metrics import (
+    REQUEST_COUNT,
+    REQUEST_DURATION,
+    RATE_LIMIT_REJECTION_COUNT,
+    CONCURRENCY_REJECTION_COUNT,
+    INFLIGHT_REQUESTS_GAUGE,
+    RATE_LIMIT_TRACKED_CLIENTS,
+    render_metrics,
+)
 from app.proxy import proxy_request
-from app.state import LoadBalancerState
+from app.state import LoadBalancerState, RateLimitEntry
 
 
 logger = logging.getLogger("load_balancer.main")
+
+
+SENSETIVE_HEADERS = {
+    "authorization",
+    "cookie",
+    "set-cookie",
+    "x-api-key",
+    "proxy-authorization",
+}
+
+
+def sanitize_headers_for_logging(headers) -> dict[str, str]:
+    sanitized = {}
+    for key, value in headers.items():
+        if key.lower() in SENSETIVE_HEADERS:
+            sanitized[key] = "***REDACTED***"
+        else:
+            sanitized[key] = value
+        return sanitized
+
+
+def resolve_client_ip(request: Request, trusted_proxies: list[str]) -> str | None:
+    direct_client_ip = request.client.host if request.client else None
+    if not direct_client_ip:
+        return None
+
+    if direct_client_ip not in trusted_proxies:
+        return direct_client_ip
+
+    x_forwarded_for = request.headers.get("x-forwarded-for")
+    if x_forwarded_for:
+        forwarded_ips = [ip.strip() for ip in x_forwarded_for.split(",") if ip.strip()]
+        if forwarded_ips:
+            return forwarded_ips[0]
+
+    x_real_ip = request.headers.get("x-real-ip")
+    if x_real_ip:
+        return x_real_ip.strip()
+
+    return direct_client_ip
+
+
+def apply_security_headers(response: Response, enabled: bool) -> None:
+    if not enabled:
+        return
+
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("ReferrerPolicy", "same-origin")
+    response.headers.setdefault("Cache-Control", "no-store")
 
 
 class RequestContextLoggingmiddleware(BaseHTTPMiddleware):
