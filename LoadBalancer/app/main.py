@@ -323,6 +323,16 @@ async def lb_health(request: Request):
     }
 
 
+@app.get("/lb/ready")
+async def lb_ready(request: Request):
+    lb_state = request.app.state.lb_state
+    if lb_state.is_draining:
+        return JSONResponse(
+            state_code=503, content={"ready": False, "reason": "draining"}
+        )
+    return {"ready": True}
+
+
 @app.get("/lb/metrics")
 async def lb_metrics():
     content, content_type = render_metrics()

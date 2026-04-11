@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from itertools import cycle
 from typing import Dict, List
 import asyncio
+import time
 
 
 @dataclass
@@ -13,11 +14,25 @@ class BackendRuntimeState:
 
 
 @dataclass
+class RateLimitEntry:
+    window_start: float
+    count: int = 0
+
+
+@dataclass
 class LoadBalancerState:
     backends: List[str]
     backend_states: Dict[str, BackendRuntimeState] = field(default_factory=dict)
     selection_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     state_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    is_draining: bool = False
+    inflight_requests: int = 0
+    inflight_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    rate_limit_store: Dict[str, RateLimitEntry] = field(default_factory=dict)
+    rate_limit_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    last_rate_limit_cleanup_ts: float = field(default_factory=time.time)
 
     def __post_init__(self):
         if not self.backend_states:
