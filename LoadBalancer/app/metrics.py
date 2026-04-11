@@ -35,6 +35,19 @@ NO_HEALTHY_BACKEND_COUNT = Counter(
     "Total number of times no healthy backends were available",
 )
 
+
+RATE_LIMIT_REJECTION_COUNT = Counter(
+    "lb_rate_limit_rejections_total",
+    "Total number of requests rejected due to per IP rate limiting",
+    ["client_ip", "path"],
+)
+
+CONCURRENCY_REJECTION_COUNT = Counter(
+    "lb_concurency_rejections_total",
+    "Total number of requests rejected due to global concurrency limits",
+    ["path"],
+)
+
 BACKEND_HEALTH = Gauge(
     "lb_backend_healthy",
     "Backend health status (1 = healthy, 0 = unhealthy)",
@@ -57,6 +70,15 @@ BACKEND_PASSIVE_FAILURES = Gauge(
     "lb_backend_passive_failures",
     "Current passive failures per backend",
     ["backend"],
+)
+
+INFLIGHT_REQUESTS_GAUGE = Gauge(
+    "lb_inflight_requests", "Current number of in-flight requests"
+)
+
+RATE_LIMIT_TRACKED_CLIENTS = Gauge(
+    "lb_rate_limit_tracked_clients",
+    "Current number of clients in the in-memory rate limiter store",
 )
 
 
