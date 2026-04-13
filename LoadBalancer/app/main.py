@@ -160,10 +160,77 @@ class RequestContextLoggingmiddleware(BaseHTTPMiddleware):
                         "error": "service is shutting down and not accepting new requests"
                     },
                 )
-            lb_state.inflight_requests += 1
 
-        request_id = str(uuid.uuid4())
-        request.state.request_id = request_id
+            if lb_state.inflight_requests >= settings.global_max_concurrent_requests:
+                CONCURRENCY_REJECTION_COUNT.labels(path=request.url.path).inc()
+
+                logger.warning(
+                    "Rejecting request because global concurrency limit is reached",
+                    extra={
+                        "extra_data": {
+                            "event": "request_rejected_concurrency_limit",
+                            "request_id": request_id,
+                            "method": request.method,
+                            "path": request.url.path,
+                            "client_ip": request.state.resolved_client_ip,
+                            "inflight_requests": lb_state.inflight_requests,
+                            "global_max_concurrent_requests": settings.global_max_concurrent_requests,
+                        }
+                    },
+                )
+                REQUEST_COUNT.labels(
+                    method=request.method, path=request.url.path, status_code="503"
+                ).inc()
+
+                response = JSONResponse(
+                    status_code=503,
+                    content={
+                        "error": "Service is temporarily unavailable due to high load. Please try again later."
+                    },
+                )
+
+                apply_security_headers(
+                    response, settings.security_response_headers_enabled
+                )
+                request.headers["X-Request-ID"] = request_id
+                return response
+
+            allowed, rate_limit_value = await enforce_rate_limit(
+                request, request.state.resolved_client_ip
+            )
+            if not allowed:
+                RATE_LIMIT_REJECTION_COUNT.labels(
+                    client_ip=request.state.resolved_client_ip or "unknown",
+                    path=request.url.path,
+                ).inc()
+                logger.warning(
+                    "Rejecting request due to rate limit",
+                    extra={
+                        "extra_data": {
+                            "event": "request_rejected_rate_limit",
+                            "request_id": request_id,
+                            "method": request.method,
+                            "path": request.url.path,
+                            "client_ip": request.state.resolved_client_ip,
+                            "retry_after_seconds": rate_limit_value,
+                        }
+                    },
+                )
+                REQUEST_COUNT.labels(
+                    method=request.method, path=request.url.path, status_code="429"
+                ).inc()
+                response = JSONResponse(
+                    status_code=429, content={"error": "Rate limit exceeded"}
+                )
+                response.headers["Retry-After"] = str(rate_limit_value)
+                response.headers["X-Request-ID"] = request_id
+                apply_security_headers(
+                    response, settings.security_response_headers_enabled
+                )
+                return response
+
+            lb_state.inflight_requests += 1
+            INFLIGHT_REQUESTS_GAUGE.set(lb_state.inflight_requests)
 
         start_time = time.perf_counter()
         logger.info(
@@ -177,6 +244,8 @@ class RequestContextLoggingmiddleware(BaseHTTPMiddleware):
                     "query": str(request.query_params),
                     "client_ip": request.client.host if request.client else None,
                     "user_agent": request.headers.get("user-agent"),
+                    "inflight_requests": lb_state.inflight_requests,
+                    "request_headers": sanitize_headers_for_logging(request.headers),
                 }
             },
         )
@@ -186,6 +255,8 @@ class RequestContextLoggingmiddleware(BaseHTTPMiddleware):
             duration_ms = round((duration_seconds) * 1000, 2)
             response.headers["X-Request_ID"] = request_id
 
+            response_headers["X-Request-ID"] = request_id
+            apply_security_headers(response, settings.security_response_headers_enabled)
             REQUEST_COUNT.labels(
                 method=request.method,
                 path=request.url.path,
@@ -238,7 +309,7 @@ class RequestContextLoggingmiddleware(BaseHTTPMiddleware):
         finally:
             async with lb_state.inflight_lock:
                 lb_state.inflight_requests -= 1
-
+                INFLIGHT_REQUESTS_GAUGE.set(lb_state.inflight_requests)
                 logger.debug(
                     "In-flight request count updated",
                     extra={
@@ -344,26 +415,14 @@ async def lifespan(app: FastAPI):
                 "app_name": settings.app_name,
                 "log_level": settings.log_level,
                 "backends": settings.backends,
-                "health_timeout": {
-                    "connect": settings.health_check_connect_timeout,
-                    "read": settings.health_check_read_timeout,
-                    "write": settings.health_check_write_timeout,
-                    "pool": settings.health_check_pool_timeout,
-                },
-                "proxy_timeout": {
-                    "connect": settings.proxy_connect_timeout,
-                    "read": settings.proxy_read_timeout,
-                    "write": settings.proxy_write_timeout,
-                    "pool": settings.proxy_pool_timeout,
-                },
-                "health_limits": {
-                    "max_connections": settings.health_max_connections,
-                    "max_keepalive_connections": settings.health_max_keepalive_connections,
-                },
-                "proxy_limits": {
-                    "max_connections": settings.proxy_max_connections,
-                    "max_keepalive_connections": settings.proxy_max_keepalive_connections,
-                },
+                "trusted_proxies": settings.trusted_proxies,
+                "max_request_body_bytes": settings.max_request_body_bytes,
+                "hide_server_header": settings.hide_server_header,
+                "security_response_headers_enabled": settings.security_response_headers_enabled,
+                "rate_limit_enabled": settings.rate_limit_enabled,
+                "rate_limit_requests": settings.rate_limit_requests,
+                "rate_limit_window_seconds": settings.rate_limit_window_seconds,
+                "global_max_concurrent_requests": settings.global_max_concurrent_requests,
             }
         },
     )
@@ -388,6 +447,12 @@ async def lifespan(app: FastAPI):
         },
     )
 
+    app.state.lb_state.is_draining = True
+
+    logger.info(
+        "Application entered draining mode",
+        extra={"extra_data": {"event": "app_draining_started"}},
+    )
     await wait_for_inflight_requests(app)
 
     app.state.health_task.cancel()
@@ -419,6 +484,9 @@ async def lb_health(request: Request):
 
     return {
         "load_balancer": "healthy",
+        "draining": lb_state.is_draining,
+        "inflight_requests": lb_state.inflight_requests,
+        "tracked_rate_limit_clients": len(lb_state.rate_limit_store),
         "configured_backends": request.app.state.settings.backends,
         "backends": {
             backend: {
