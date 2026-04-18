@@ -13,425 +13,57 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from app.config import get_settings
 from app.health import health_check_loop
 from app.logging_config import configure_logging
-from app.metrics import (
-    REQUEST_COUNT,
-    REQUEST_DURATION,
-    RATE_LIMIT_REJECTION_COUNT,
-    CONCURRENCY_REJECTION_COUNT,
-    INFLIGHT_REQUESTS_GAUGE,
-    RATE_LIMIT_TRACKED_CLIENTS,
-    render_metrics,
-)
+
 from app.proxy import proxy_request
-from app.state import LoadBalancerState, RateLimitEntry
+from app.state import GatewayState, ServiceRuntimeState
 
 
 logger = logging.getLogger("load_balancer.main")
 
 
-SENSETIVE_HEADERS = {
-    "authorization",
-    "cookie",
-    "set-cookie",
-    "x-api-key",
-    "proxy-authorization",
-}
+def build_gateway_state(settings) -> GatewayState:
+    services = {}
 
-
-def sanitize_headers_for_logging(headers) -> dict[str, str]:
-    sanitized = {}
-    for key, value in headers.items():
-        if key.lower() in SENSETIVE_HEADERS:
-            sanitized[key] = "***REDACTED***"
-        else:
-            sanitized[key] = value
-        return sanitized
-
-
-def resolve_client_ip(request: Request, trusted_proxies: list[str]) -> str | None:
-    direct_client_ip = request.client.host if request.client else None
-    if not direct_client_ip:
-        return None
-
-    if direct_client_ip not in trusted_proxies:
-        return direct_client_ip
-
-    x_forwarded_for = request.headers.get("x-forwarded-for")
-    if x_forwarded_for:
-        forwarded_ips = [ip.strip() for ip in x_forwarded_for.split(",") if ip.strip()]
-        if forwarded_ips:
-            return forwarded_ips[0]
-
-    x_real_ip = request.headers.get("x-real-ip")
-    if x_real_ip:
-        return x_real_ip.strip()
-
-    return direct_client_ip
-
-
-def apply_security_headers(response: Response, enabled: bool) -> None:
-    if not enabled:
-        return
-
-    response.headers.setdefault("X-Content-Type-Options", "nosniff")
-    response.headers.setdefault("X-Frame-Options", "DENY")
-    response.headers.setdefault("ReferrerPolicy", "same-origin")
-    response.headers.setdefault("Cache-Control", "no-store")
-
-
-async def enforce_rate_limit(
-    request: Request, client_ip: str | None
-) -> tuple[bool, int | None]:
-    settings = request.app.state.settings
-    lb_state = request.app.state.lb_state
-
-    if not settings.rate_limit_enabled or not client_ip:
-        return True, None
-
-    now = time.time()
-    window_seconds = settings.rate_limit_window_seconds
-
-    async with lb_state.rate_limit_lock:
-        if now - lb_state.last_rate_limit_cleanup_ts >= window_seconds:
-            cutoff = now - window_seconds
-            lb_state.rate_limit_store = {
-                ip: entry
-                for ip, entry in lb_state.rate_limit_store.items()
-                if entry.window_start >= cutoff
-            }
-            lb_state.last_rate_limit_cleanup_ts = now
-            RATE_LIMIT_TRACKED_CLIENTS.set(len(lb_state.rate_limit_store))
-
-        entry = lb_state.rate_limit_store.get(client_ip)
-
-        if entry is None:
-            entry = RateLimitEntry(window_start=now, count=1)
-            lb_state.rate_limit_store[client_ip] = entry
-            RATE_LIMIT_TRACKED_CLIENTS.set(len(lb_state.rate_limit_store))
-            return True, settings.rate_limit_requests - 1
-
-        if now - entry.window_start >= window_seconds:
-            entry.window_start = now
-            entry.count = 1
-            return True, settings.rate_limit_requests - 1
-
-        if entry.count >= settings.rate_limit_requests:
-            remaining_window = int(max(1, window_seconds - (now - entry.window_start)))
-            return False, remaining_window
-
-        entry.count += 1
-        return True, settings.rate_limit_requests - entry.count
-
-
-class RequestContextLoggingmiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        lb_state = request.app.state.lb_state
-        settings = request.app.state.settings
-
-        request_id = str(uuid.uuid4())
-        request.state.request_id = request_id
-        request.state.resolved_client_ip = resolve_client_ip(
-            request, settings.trusted_proxies
+    for service in settings.services:
+        services[service.name] = ServiceRuntimeState(
+            name=service.name, prefix=service.prefix, backends=service.backends
         )
 
-        async with lb_state.inflight_lock:
-            if lb_state.is_draining:
-                logger.warning(
-                    "Rejecting request because application is draining",
-                    extra={
-                        "extra_data": {
-                            "event": "request_rejected_draining",
-                            "method": request.method,
-                            "path": request.url.path,
-                            "query": str(request.query_params),
-                            "client_ip": (
-                                request.client.host if request.client else None
-                            ),
-                        }
-                    },
-                )
-                REQUEST_COUNT.labels(
-                    method=request.method, path=request.url.path, status_code="503"
-                ).inc()
-
-                return JSONResponse(
-                    status_code=503,
-                    content={
-                        "error": "service is shutting down and not accepting new requests"
-                    },
-                )
-
-            if lb_state.inflight_requests >= settings.global_max_concurrent_requests:
-                CONCURRENCY_REJECTION_COUNT.labels(path=request.url.path).inc()
-
-                logger.warning(
-                    "Rejecting request because global concurrency limit is reached",
-                    extra={
-                        "extra_data": {
-                            "event": "request_rejected_concurrency_limit",
-                            "request_id": request_id,
-                            "method": request.method,
-                            "path": request.url.path,
-                            "client_ip": request.state.resolved_client_ip,
-                            "inflight_requests": lb_state.inflight_requests,
-                            "global_max_concurrent_requests": settings.global_max_concurrent_requests,
-                        }
-                    },
-                )
-                REQUEST_COUNT.labels(
-                    method=request.method, path=request.url.path, status_code="503"
-                ).inc()
-
-                response = JSONResponse(
-                    status_code=503,
-                    content={
-                        "error": "Service is temporarily unavailable due to high load. Please try again later."
-                    },
-                )
-
-                apply_security_headers(
-                    response, settings.security_response_headers_enabled
-                )
-                request.headers["X-Request-ID"] = request_id
-                return response
-
-            allowed, rate_limit_value = await enforce_rate_limit(
-                request, request.state.resolved_client_ip
-            )
-            if not allowed:
-                RATE_LIMIT_REJECTION_COUNT.labels(
-                    client_ip=request.state.resolved_client_ip or "unknown",
-                    path=request.url.path,
-                ).inc()
-                logger.warning(
-                    "Rejecting request due to rate limit",
-                    extra={
-                        "extra_data": {
-                            "event": "request_rejected_rate_limit",
-                            "request_id": request_id,
-                            "method": request.method,
-                            "path": request.url.path,
-                            "client_ip": request.state.resolved_client_ip,
-                            "retry_after_seconds": rate_limit_value,
-                        }
-                    },
-                )
-                REQUEST_COUNT.labels(
-                    method=request.method, path=request.url.path, status_code="429"
-                ).inc()
-                response = JSONResponse(
-                    status_code=429, content={"error": "Rate limit exceeded"}
-                )
-                response.headers["Retry-After"] = str(rate_limit_value)
-                response.headers["X-Request-ID"] = request_id
-                apply_security_headers(
-                    response, settings.security_response_headers_enabled
-                )
-                return response
-
-            lb_state.inflight_requests += 1
-            INFLIGHT_REQUESTS_GAUGE.set(lb_state.inflight_requests)
-
-        start_time = time.perf_counter()
-        logger.info(
-            "Incoming request received",
-            extra={
-                "extra_data": {
-                    "event": "incoming_request",
-                    "request_id": request_id,
-                    "method": request.method,
-                    "path": request.url.path,
-                    "query": str(request.query_params),
-                    "client_ip": request.client.host if request.client else None,
-                    "user_agent": request.headers.get("user-agent"),
-                    "inflight_requests": lb_state.inflight_requests,
-                    "request_headers": sanitize_headers_for_logging(request.headers),
-                }
-            },
-        )
-        try:
-            response = await call_next(request)
-            duration_seconds = time.perf_counter() - start_time
-            duration_ms = round((duration_seconds) * 1000, 2)
-            response.headers["X-Request_ID"] = request_id
-
-            response_headers["X-Request-ID"] = request_id
-            apply_security_headers(response, settings.security_response_headers_enabled)
-            REQUEST_COUNT.labels(
-                method=request.method,
-                path=request.url.path,
-                status_code=str(response.status_code),
-            ).inc()
-
-            REQUEST_DURATION.labels(
-                method=request.method, path=request.url.path
-            ).observe(duration_seconds)
-
-            logger.info(
-                "Incoming request received",
-                extra={
-                    "extra_data": {
-                        "event": "incoming_request",
-                        "request_id": request_id,
-                        "method": request.method,
-                        "path": request.url.path,
-                        "query": str(request.query_params),
-                        "client_ip": request.client.host if request.client else None,
-                        "user_agent": request.headers.get("user-agent"),
-                    }
-                },
-            )
-            return response
-
-        except Exception:
-            duration_seconds = time.perf_counter() - start_time
-            duration_ms = round(duration_seconds * 1000, 2)
-
-            REQUEST_COUNT.labels(
-                method=request.method, path=request.url.path, status_code="500"
-            ).inc()
-            REQUEST_DURATION.labels(
-                method=request.method, path=request.url.path
-            ).observe(duration_seconds)
-            logger.exception(
-                "Unhandled request error",
-                extra={
-                    "extra_data": {
-                        "event": "request_unhandled_error",
-                        "request_id": request_id,
-                        "method": request.method,
-                        "path": request.url.path,
-                        "duration_ms": duration_ms,
-                    }
-                },
-            )
-            raise
-        finally:
-            async with lb_state.inflight_lock:
-                lb_state.inflight_requests -= 1
-                INFLIGHT_REQUESTS_GAUGE.set(lb_state.inflight_requests)
-                logger.debug(
-                    "In-flight request count updated",
-                    extra={
-                        "extra_data": {
-                            "event": "inflight_request_count_updated",
-                            "inflight_requests": lb_state.inflight_requests,
-                        }
-                    },
-                )
-
-
-async def wait_for_inflight_requests(app: FastAPI) -> None:
-    settings = app.state.settings
-    lb_state = app.state.lb_state
-
-    start_time = time.perf_counter()
-
-    while True:
-        async with lb_state.inflight_lock:
-            inflight = lb_state.inflight_requests
-
-        if inflight == 0:
-            logger.info(
-                "All in-flight requests completed during shutdown drain",
-                extra={
-                    "extra_data": {
-                        "event": "shutdown_drain_completed",
-                        "inflight_requests": inflight,
-                    }
-                },
-            )
-            return
-
-        elapsed = time.perf_counter() - start_time
-        if elapsed >= settings.shutdown_drain_timeout_seconds:
-            logger.warning(
-                "Shutdown drain timeout reached with in-flight requests remaining",
-                extra={
-                    "extra_data": {
-                        "event": "shutdown_drain_timeout",
-                        "remaining_inflight_requests": inflight,
-                        "timeout_seconds": settings.shutdown_drain_timeout_seconds,
-                    }
-                },
-            )
-            return
-        logger.info(
-            "Waiting for in-flight requests to complete",
-            extra={
-                "extra_data": {
-                    "event": "shutdown_drain_waiting",
-                    "remaining_inflight_requests": inflight,
-                    "elapsed_seconds": round(elapsed, 2),
-                }
-            },
-        )
-
-        await asyncio.sleep(settings.shutdown_poll_interval_seconds)
+    return GatewayState(services=services)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
     configure_logging(
-        settings.log_level,
-        settings.log_file,
-        settings.log_max_bytes,
-        settings.log_backup_count,
+        log_level="INFO",
+        log_file="logs/gateway.log",
+        log_max_bytes=5_000_000,
+        log_backup_count=5,
     )
 
     app.state.settings = settings
-    app.state.lb_state = LoadBalancerState(backends=settings.backends)
+    app.state.gateway_state = build_gateway_state(settings)
 
-    health_timeout = httpx.Timeout(
-        connect=settings.health_check_connect_timeout,
-        read=settings.health_check_read_timeout,
-        write=settings.health_check_write_timeout,
-        pool=settings.health_check_pool_timeout,
-    )
+    app.state.health_client = httpx.AsyncClient(timeout=2.0, follows_redirects=False)
 
-    proxy_timeout = httpx.Timeout(
-        connect=settings.proxy_connect_timeout,
-        read=settings.proxy_read_timeout,
-        write=settings.proxy_write_timeout,
-        pool=settings.proxy_pool_timeout,
-    )
-
-    health_limits = httpx.Limits(
-        max_connections=settings.health_max_connections,
-        max_keepalive_connections=settings.health_max_keepalive_connections,
-    )
-
-    proxy_limits = httpx.Limits(
-        max_connections=settings.proxy_max_connections,
-        max_keepalive_connections=settings.proxy_max_keepalive_connections,
-    )
+    app.state.proxy_client = httpx.AysyncClient(timeout=10.0, follows_redirects=False)
 
     logger.info(
-        "Application startup initiated",
+        "API Gateway startup initiated",
         extra={
             "extra_data": {
-                "event": "app_startup",
-                "app_name": settings.app_name,
-                "log_level": settings.log_level,
-                "backends": settings.backends,
-                "trusted_proxies": settings.trusted_proxies,
-                "max_request_body_bytes": settings.max_request_body_bytes,
-                "hide_server_header": settings.hide_server_header,
-                "security_response_headers_enabled": settings.security_response_headers_enabled,
-                "rate_limit_enabled": settings.rate_limit_enabled,
-                "rate_limit_requests": settings.rate_limit_requests,
-                "rate_limit_window_seconds": settings.rate_limit_window_seconds,
-                "global_max_concurrent_requests": settings.global_max_concurrent_requests,
+                "event": "gateway_startup",
+                "services": [
+                    {
+                        "name": service.name,
+                        "prefix": service.prefix,
+                        "backends": service.backends,
+                    }
+                    for service in settings.services
+                ],
             }
         },
-    )
-
-    app.state.health_client = httpx.AsyncClient(
-        timeout=health_timeout, limits=health_limits, follow_redirects=False
-    )
-    app.state.proxy_client = httpx.AsyncClient(
-        timeout=proxy_timeout, limits=proxy_limits, follow_redirects=False
     )
 
     app.state.health_task = asyncio.create_task(health_check_loop(app))
@@ -439,81 +71,40 @@ async def lifespan(app: FastAPI):
     yield
 
     logger.info(
-        "Application shutdown initiated",
-        extra={
-            "extra_data": {
-                "event": "app_shutdown_started",
-            }
-        },
+        "API Gateway shutdown initiated",
+        extra={"extra_data": {"event": "gateway_shutdown_started"}},
     )
-
-    app.state.lb_state.is_draining = True
-
-    logger.info(
-        "Application entered draining mode",
-        extra={"extra_data": {"event": "app_draining_started"}},
-    )
-    await wait_for_inflight_requests(app)
 
     app.state.health_task.cancel()
     try:
-        await app.state.health_task
+        await app.state.health_check
     except asyncio.CancelledError:
         pass
-
-    await app.state.health_client.aclose()
-    await app.state.proxy_client.aclose()
-
     logger.info(
-        "Application shutdown completed",
-        extra={
-            "extra_data": {
-                "event": "app_shutdown_completed",
-            }
-        },
+        "API Gateway shutdown completed",
+        extra={"extra_data": {"event": "gateway_shutdown_completed"}},
     )
 
 
 app = FastAPI(title=get_settings().app_name, lifespan=lifespan)
-app.add_middleware(RequestContextLoggingmiddleware)
 
 
-@app.get("/lb/health")
-async def lb_health(request: Request):
-    lb_state = request.app.state.lb_state
+@app.get("/gateway/routes")
+async def show_routes(request: Request):
+    gateway_state = request.app.state.gateway_state
 
     return {
-        "load_balancer": "healthy",
-        "draining": lb_state.is_draining,
-        "inflight_requests": lb_state.inflight_requests,
-        "tracked_rate_limit_clients": len(lb_state.rate_limit_store),
-        "configured_backends": request.app.state.settings.backends,
-        "backends": {
-            backend: {
-                "healthy": state.healthy,
-                "consecutive_failures": state.consecutive_failures,
-                "consecutive_successes": state.consecutive_successes,
-                "passive_failures": state.passive_failures,
+        "services": {
+            service_name: {
+                "prefix": service_state.prefix,
+                "backends": {
+                    backend: {"healthy": state.healthy}
+                    for backend, state in service_state.backend_states.items()
+                },
             }
-            for backend, state in lb_state.backend_states.items()
-        },
+            for service_name, service_state in gateway_state.services.items()
+        }
     }
-
-
-@app.get("/lb/ready")
-async def lb_ready(request: Request):
-    lb_state = request.app.state.lb_state
-    if lb_state.is_draining:
-        return JSONResponse(
-            state_code=503, content={"ready": False, "reason": "draining"}
-        )
-    return {"ready": True}
-
-
-@app.get("/lb/metrics")
-async def lb_metrics():
-    content, content_type = render_metrics()
-    return Response(content=content, media_type=content_type)
 
 
 @app.api_route(
