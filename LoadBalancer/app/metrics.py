@@ -6,79 +6,50 @@ from prometheus_client import (
     CONTENT_TYPE_LATEST,
 )
 
-REQUEST_COUNT = Counter(
-    "lb_requests_total",
-    "Total number of incoming requests handled by the load balancer",
-    ["method", "path", "status_code"],
+GATEWAY_REQUEST_COUNT = Counter(
+    "gateway_requests_total",
+    "Total number of requests handled by the API gateway",
+    ["service", "method", "path", "status_code"],
 )
 
-REQUEST_DURATION = Histogram(
-    "lb_request_duration_seconds",
-    "Request processing duration in seconds",
+GATEWAY_REQUEST_DURATION = Histogram(
+    "gateway_requests_duration_seconds",
+    "Gateway request processing duration in seconds",
+    ["service", "method", "path"],
+)
+
+
+GATEWAY_ROUTE_MISS_COUNT = Counter(
+    "gateway_route_miss_total",
+    "Total number of requests that did not match any route",
     ["method", "path"],
 )
 
-PROXY_RETRY_COUNT = Counter(
-    "lb_proxy_retries_total",
-    "Total number of proxy retries asttmpted",
-    ["method", "path", "backend"],
-)
 
-PROXY_FAILURE_COUNT = Counter(
-    "lb_proxy_failure_total",
-    "Total number of proxy failures",
-    ["method", "path", "backend", "error_type"],
-)
-
-NO_HEALTHY_BACKEND_COUNT = Counter(
-    "lb_no_healthy_backends_total",
-    "Total number of times no healthy backends were available",
+GATEWAY_NO_HEALTHY_BACKEND_COUNT = Counter(
+    "gateway_no_healthy_backend_total",
+    "Total number of times no healthy backend was available",
+    ["service", "path"],
 )
 
 
-RATE_LIMIT_REJECTION_COUNT = Counter(
-    "lb_rate_limit_rejections_total",
-    "Total number of requests rejected due to per IP rate limiting",
-    ["client_ip", "path"],
+GATEWAY_PROXY_FAILURE_COUNT = Counter(
+    "gateway_proxy_failure_total",
+    "Total number of proxy failures in API gateway",
+    ["service", "backend", "method", "path", "error_type"],
 )
 
-CONCURRENCY_REJECTION_COUNT = Counter(
-    "lb_concurency_rejections_total",
-    "Total number of requests rejected due to global concurrency limits",
-    ["path"],
+GATEWAY_BACKEND_HEALTH = Gauge(
+    "gateway_backend_health",
+    "Backend health status per service (1 = healthy, 0 = unhealthy)",
+    ["service", "backend"],
 )
 
-BACKEND_HEALTH = Gauge(
-    "lb_backend_healthy",
-    "Backend health status (1 = healthy, 0 = unhealthy)",
-    ["backend"],
-)
 
-BACKEND_CONSECUTIVE_FAILURES = Gauge(
-    "lb_backend_consecutive_failures",
-    "Number of consecutive failures for each backend",
-    ["backend"],
-)
-
-BACKEND_CONSECUTIVE_SUCCESSES = Gauge(
-    "lb_backend_consecutive_successes",
-    "Current consecutive active heralth check successes per backend",
-    ["backend"],
-)
-
-BACKEND_PASSIVE_FAILURES = Gauge(
-    "lb_backend_passive_failures",
-    "Current passive failures per backend",
-    ["backend"],
-)
-
-INFLIGHT_REQUESTS_GAUGE = Gauge(
-    "lb_inflight_requests", "Current number of in-flight requests"
-)
-
-RATE_LIMIT_TRACKED_CLIENTS = Gauge(
-    "lb_rate_limit_tracked_clients",
-    "Current number of clients in the in-memory rate limiter store",
+GATEWAY_BACKEND_SELECTED = Counter(
+    "gateway_backend_selected_total",
+    "Total number of times a backend was selected for a service",
+    ["service", "backend"],
 )
 
 
