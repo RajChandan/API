@@ -7,6 +7,13 @@ import httpx
 from fastapi import Request
 from fastapi.responses import JSONResponse, Response
 
+from app.metrics import (
+    GATEWAY_BACKEND_SELECTED,
+    GATEWAY_NO_HEALTHY_BACKEND_COUNT,
+    GATEWAY_PROXY_FAILURE_COUNT,
+    GATEWAY_ROUTE_MISS_COUNT,
+)
+
 from app.router import match_service
 
 logger = logging.getLogger("load_balancer.proxy")
@@ -48,11 +55,6 @@ async def get_next_backend(service_state) -> Optional[str]:
             return candidate
     return None
 
-    lb_state = app.state.lb_state
-    async with lb_state.state_lock:
-        backend_state = lb_state.backend_states[backend]
-        backend_state.passive_failures = 0
-
 
 async def proxy_request(request: Request):
     app = request.app
@@ -62,6 +64,9 @@ async def proxy_request(request: Request):
     matched_service = match_service(request.url.path, gateway_state)
 
     if not matched_service:
+        GATEWAY_ROUTE_MISS_COUNT.labels(
+            method=request.method, path=request.url.path
+        ).inc()
         logger.warning(
             "No route matched",
             extra={
@@ -78,6 +83,10 @@ async def proxy_request(request: Request):
     backend = get_next_backend(matched_service)
 
     if not backend:
+
+        GATEWAY_NO_HEALTHY_BACKEND_COUNT.labels(
+            service=matched_service.name, path=request.url.path
+        ).inc()
         logger.error(
             "No healthy backend available for service",
             extra={
@@ -96,10 +105,12 @@ async def proxy_request(request: Request):
             },
         )
 
+    GATEWAY_BACKEND_SELECTED.labels(service=matched_service.name, backend=backend).inc()
     target_url = httpx.URL(
         url=f"{backend}{request.url.path}", params=request.query_params
     )
 
+    start_time = time.perf_counter()
     try:
         body = await request.body()
         headers = filter_headers(request.headers)
@@ -120,6 +131,8 @@ async def proxy_request(request: Request):
         upstream_response = await proxy_client.request(
             method=request.method, url=target_url, headers=headers, content=body
         )
+
+        duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
         response_headers = filter_headers(upstream_response.headers)
 
         logger.info(
@@ -144,6 +157,14 @@ async def proxy_request(request: Request):
         )
 
     except httpx.RequestError as exc:
+        GATEWAY_PROXY_FAILURE_COUNT.labels(
+            service=matched_service.name,
+            backend=backend,
+            method=request.method,
+            path=request.url.path,
+            error_type=exc.__class__.__name__,
+        ).inc()
+
         logger.exception(
             "Proxy request failed",
             extra={
