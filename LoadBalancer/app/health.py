@@ -2,6 +2,8 @@ import asyncio
 import logging
 import httpx
 
+from app.metrics import GATEWAY_BACKEND_HEALTH
+
 logger = logging.getLogger("API_Gateway.health")
 
 
@@ -13,8 +15,15 @@ async def check_backend_health(client: httpx.AsyncClient, backend: str) -> bool:
         return False
 
 
+def update_backend_health_metric(
+    service_name: str, backend: str, is_healthy: bool
+) -> None:
+    GATEWAY_BACKEND_HEALTH.labels(service=service_name, backend=backend).set(
+        1 if is_healthy else 0
+    )
+
+
 async def health_check_loop(app):
-    settings = app.state.settings
     gateway_state = app.state.gateway_state
     client = app.state.health_client
 
