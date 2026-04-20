@@ -14,7 +14,10 @@ from app.config import get_settings
 from app.health import health_check_loop
 from app.logging_config import configure_logging
 
+from app.metrics import GATEWAY_REQUEST_COUNT, GATEWAY_REQUEST_DURATION, render_metrics
+
 from app.proxy import proxy_request
+from app.router import match_service
 from app.state import GatewayState, ServiceRuntimeState
 
 
@@ -80,6 +83,8 @@ async def lifespan(app: FastAPI):
         await app.state.health_check
     except asyncio.CancelledError:
         pass
+    await app.state.health_client.aclose()
+    await app.state.proxy_client.aclose()
     logger.info(
         "API Gateway shutdown completed",
         extra={"extra_data": {"event": "gateway_shutdown_completed"}},
@@ -87,6 +92,29 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=get_settings().app_name, lifespan=lifespan)
+
+
+@app.middleware("http")
+async def metrics_middleware(request: Request, call_next):
+    matched_service = match_service(request.url.path, request.app.state.gateway_state)
+    service_name = matched_service.name if matched_service else "unmatched"
+
+    start_time = time.perf_counter()
+    response = await call_next(request)
+    duration_seconds = time.perf_counter() - start_time
+
+    GATEWAY_REQUEST_COUNT.labels(
+        service=service_name,
+        method=request.method,
+        path=request.url.path,
+        status_code=str(response.status_code),
+    ).inc()
+
+    GATEWAY_REQUEST_DURATION.labels(
+        service=service_name, method=request.method, path=request.url.path
+    ).observe(duration_seconds)
+
+    return response
 
 
 @app.get("/gateway/routes")
@@ -105,6 +133,12 @@ async def show_routes(request: Request):
             for service_name, service_state in gateway_state.services.items()
         }
     }
+
+
+@app.get("/gateway/metrics")
+async def gateway_metrics():
+    content, content_type = render_metrics()
+    return Response(content=content, media_type=content_type)
 
 
 @app.api_route(
