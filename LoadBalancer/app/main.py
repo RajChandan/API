@@ -31,6 +31,7 @@ def build_gateway_state(settings) -> GatewayState:
         services[service.name] = ServiceRuntimeState(
             name=service.name, prefix=service.prefix, backends=service.backends
         )
+        services[service.name].policy = service.policy
 
     return GatewayState(services=services)
 
@@ -50,7 +51,7 @@ async def lifespan(app: FastAPI):
 
     app.state.health_client = httpx.AsyncClient(timeout=2.0, follows_redirects=False)
 
-    app.state.proxy_client = httpx.AysyncClient(timeout=10.0, follows_redirects=False)
+    # app.state.proxy_client = httpx.AysyncClient(timeout=10.0, follows_redirects=False)
 
     logger.info(
         "API Gateway startup initiated",
@@ -62,6 +63,15 @@ async def lifespan(app: FastAPI):
                         "name": service.name,
                         "prefix": service.prefix,
                         "backends": service.backends,
+                        "policy": {
+                            "allowed_methods": service.policy.allowed_methods,
+                            "require_auth": service.policy.require_auth,
+                            "max_request_body_bytes": service.policy.max_request_body_bytes,
+                            "connect_timeout": service.policy.connect_timeout,
+                            "read_timeout": service.policy.read_timeout,
+                            "write_timeout": service.policy.write_timeout,
+                            "pool_timeout": service.policy.pool_timeout,
+                        },
                     }
                     for service in settings.services
                 ],
@@ -84,7 +94,7 @@ async def lifespan(app: FastAPI):
     except asyncio.CancelledError:
         pass
     await app.state.health_client.aclose()
-    await app.state.proxy_client.aclose()
+    #
     logger.info(
         "API Gateway shutdown completed",
         extra={"extra_data": {"event": "gateway_shutdown_completed"}},
@@ -125,6 +135,15 @@ async def show_routes(request: Request):
         "services": {
             service_name: {
                 "prefix": service_state.prefix,
+                "policy": {
+                    "allowed_methods": service_state.policy.allowed_methods,
+                    "require_auth": service_state.policy.require_auth,
+                    "max_request_body_bytes": service_state.policy.max_request_body_bytes,
+                    "connect_timeout": service_state.policy.connect_timeout,
+                    "read_timeout": service_state.policy.read_timeout,
+                    "write_timeout": service_state.policy.write_timeout,
+                    "pool_timeout": service_state.policy.pool_timeout,
+                },
                 "backends": {
                     backend: {"healthy": state.healthy}
                     for backend, state in service_state.backend_states.items()
