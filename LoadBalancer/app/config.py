@@ -84,9 +84,10 @@ class ServiceConfig(BaseModel):
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", case_sensetive=False
+        env_file=".env", env_file_encoding="utf-8", case_sensetive=False,extra="ignore"
     )
     app_name: str = "API Gateway"
+    gateway_api_key : Optional[str] = "super-secret-gateway-key"
     services: List[ServiceConfig] = Field(
         default=[
             ServiceConfig(

@@ -49,7 +49,7 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
     app.state.gateway_state = build_gateway_state(settings)
 
-    app.state.health_client = httpx.AsyncClient(timeout=2.0, follows_redirects=False)
+    app.state.health_client = httpx.AsyncClient(timeout=2.0, follow_redirects=False)
 
     # app.state.proxy_client = httpx.AysyncClient(timeout=10.0, follows_redirects=False)
 

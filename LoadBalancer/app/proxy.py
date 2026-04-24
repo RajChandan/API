@@ -85,7 +85,6 @@ def is_authorized(request: Request, expected_api_key: str | None) -> bool:
 
 async def proxy_request(request: Request):
     app = request.app
-    proxy_client = app.state.proxy_client
     gateway_state = app.state.gateway_state
 
     matched_service = match_service(request.url.path, gateway_state)
@@ -175,7 +174,7 @@ async def proxy_request(request: Request):
             },
         )
 
-    backend = get_next_backend(matched_service)
+    backend = await get_next_backend(matched_service)
 
     if not backend:
 
