@@ -16,7 +16,7 @@ from app.metrics import (
 
 from app.router import match_service
 
-logger = logging.getLogger("load_balancer.proxy")
+logger = logging.getLogger("api_gateway.proxy")
 
 HOP_BY_HOP_HEADERS = {
     "connection",

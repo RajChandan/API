@@ -15,12 +15,7 @@ async def check_backend_health(client: httpx.AsyncClient, backend: str) -> bool:
         return False
 
 
-def update_backend_health_metric(
-    service_name: str, backend: str, is_healthy: bool
-) -> None:
-    GATEWAY_BACKEND_HEALTH.labels(service=service_name, backend=backend).set(
-        1 if is_healthy else 0
-    )
+
 
 
 async def health_check_loop(app):
@@ -43,6 +38,8 @@ async def health_check_loop(app):
                 is_healthy = await check_backend_health(client, backend)
                 previous = service_state.backend_states[backend].healthy
                 service_state.backend_states[backend].healthy = is_healthy
+
+                GATEWAY_BACKEND_HEALTH.labels(service=service_name,backend=backend).set(1 if is_healthy else 0)
 
                 if previous != is_healthy:
                     logger.warning(

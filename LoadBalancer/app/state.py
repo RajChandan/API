@@ -4,13 +4,12 @@ from typing import Dict, List
 import asyncio
 import time
 
+from app.config import ServicePolicy
 
 @dataclass
 class BackendRuntimeState:
     healthy: bool = True
-    # consecutive_failures: int = 0
-    # consecutive_successes: int = 0
-    # passive_failures: int = 0
+   
 
 
 @dataclass
@@ -18,6 +17,7 @@ class ServiceRuntimeState:
     name: str
     prefix: str
     backends: List[str]
+    policy:ServicePolicy
     backend_states: Dict[str, BackendRuntimeState] = field(default_factory=dict)
 
     def __post_init__(self):

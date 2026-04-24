@@ -24,11 +24,11 @@ class JsonFormatter(logging.Formatter):
 
         if record.exc_info:
             log_data["exception"] = self.formatException(record.exc_info)
-        return json.dumps(log_data,default=str)
+        return json.dumps(log_data,default=str,ensure_ascii=False)
 
 
 def configure_logging(
-    log_level: str, log_file: str, log_max_bytes: int, log_backup_count: int
+    log_level: str = "INFO", log_file: str = "logs/gateway.log", log_max_bytes: int = 5_000_000, log_backup_count: int = 5
 ) -> None:
     formatter = JsonFormatter()
     root_logger = logging.getLogger()

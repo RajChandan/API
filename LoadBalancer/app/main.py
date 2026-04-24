@@ -21,7 +21,7 @@ from app.router import match_service
 from app.state import GatewayState, ServiceRuntimeState
 
 
-logger = logging.getLogger("load_balancer.main")
+logger = logging.getLogger("api_gateway.main")
 
 
 def build_gateway_state(settings) -> GatewayState:
@@ -29,9 +29,9 @@ def build_gateway_state(settings) -> GatewayState:
 
     for service in settings.services:
         services[service.name] = ServiceRuntimeState(
-            name=service.name, prefix=service.prefix, backends=service.backends
+            name=service.name, prefix=service.prefix, backends=service.backends,policy:service.policy
         )
-        services[service.name].policy = service.policy
+        
 
     return GatewayState(services=services)
 
