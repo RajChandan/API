@@ -15,6 +15,10 @@ class ServicePolicy(BaseModel):
     read_timeout: float = 10.0
     write_timeout: float = 10.0
     pool_timeout: float = 5.0
+    retry_enabled: bool = True
+    retry_max_attempts: int = 2
+    retry_backoff_ms: int = 200
+    retry_on_methods: List[str] = Field(default=["GET", "HEAD", "OPTIONS"])
 
     @field_validator("allowed_methods")
     @classmethod
@@ -44,6 +48,30 @@ class ServicePolicy(BaseModel):
         if value <= 0:
             raise ValueError("max_request_body_bytes must be greater than 0")
         return value
+
+    @field_validator("retry_max_attempts", "retry_backoff_ms")
+    @classmethod
+    def validate_retry_ints(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("Retry value mus be greater than 0")
+        return value
+
+    @field_validator("retry_on_methods")
+    @classmethod
+    def validate_retry_methods(cls, value: List[str]) -> List[str]:
+        allowed = {"GET", "HEAD", "OPTIONS", "PUT", "DELETE"}
+        normalized = []
+        seen = set()
+
+        for method in value:
+            method = method.upper().strip()
+            if method not in allowed:
+                raise ValueError(f"Unsupported retry method : {method}")
+
+            if method not in seen:
+                normalized.append(method)
+                seen.add(method)
+        return normalized
 
 
 class ServiceConfig(BaseModel):
@@ -79,12 +107,12 @@ class ServiceConfig(BaseModel):
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", case_sensetive=False,extra="ignore"
+        env_file=".env", env_file_encoding="utf-8", case_sensetive=False, extra="ignore"
     )
     app_name: str = "API Gateway"
     app_host: str = "0.0.0.0"
     app_port: int = 8080
-    gateway_api_key : Optional[str] = "super-secret-gateway-key"
+    gateway_api_key: Optional[str] = "super-secret-gateway-key"
     services: List[ServiceConfig] = Field(
         default=[
             ServiceConfig(
@@ -128,4 +156,3 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-    
