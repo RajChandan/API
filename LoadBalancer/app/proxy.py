@@ -206,12 +206,7 @@ async def proxy_request(request: Request):
 
     headers = filter_headers(request.headers)
     start_time = time.perf_counter()
-    timeout = httpx.Timeout(
-        connect=policy.connect_timeout,
-        read=policy.read_timeout,
-        write=policy.write_timeout,
-        pool=policy.pool_timeout,
-    )
+
     try:
 
         logger.info(
@@ -237,11 +232,18 @@ async def proxy_request(request: Request):
             },
         )
 
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
-            upstream_response = await client.request(
-                method=request.method, url=target_url, headers=headers, content=body
+        if matched_service.client is None:
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": "Service HTTP client is not initialized",
+                    "service": matched_service.name,
+                },
             )
 
+        upstream_response = await matched_service.client.request(
+            method=request.method, url=target_url, headers=headers, content=body
+        )
         duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
         response_headers = filter_headers(upstream_response.headers)
 

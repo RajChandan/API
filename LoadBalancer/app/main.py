@@ -28,10 +28,21 @@ def build_gateway_state(settings) -> GatewayState:
     services = {}
 
     for service in settings.services:
-        services[service.name] = ServiceRuntimeState(
-            name=service.name, prefix=service.prefix, backends=service.backends,policy:service.policy
+        timeout = httpx.Timeout(
+            connect=service.policy.connect_timeout,
+            read=service.policy.read_timeout,
+            write=service.policy.write_timeout,
+            pool=service.policy.pool_timeout,
         )
-        
+        client = httpx.AsyncClient(timeout=timeout, follow_redirects=False)
+
+        services[service.name] = ServiceRuntimeState(
+            name=service.name,
+            prefix=service.prefix,
+            backend=service.backends,
+            policy=service.policy,
+            client=client,
+        )
 
     return GatewayState(services=services)
 
@@ -94,6 +105,10 @@ async def lifespan(app: FastAPI):
     except asyncio.CancelledError:
         pass
     await app.state.health_client.aclose()
+
+    for service_state in app.state.gateway_state.services.values():
+        if service_state.client:
+            await service_state.client.aclose()
     #
     logger.info(
         "API Gateway shutdown completed",

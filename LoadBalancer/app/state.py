@@ -1,15 +1,14 @@
 from dataclasses import dataclass, field
 from itertools import cycle
-from typing import Dict, List
-import asyncio
-import time
+from typing import Dict, List, Optional
+import httpx
 
 from app.config import ServicePolicy
+
 
 @dataclass
 class BackendRuntimeState:
     healthy: bool = True
-   
 
 
 @dataclass
@@ -17,7 +16,8 @@ class ServiceRuntimeState:
     name: str
     prefix: str
     backends: List[str]
-    policy:ServicePolicy
+    policy: ServicePolicy
+    client: Optional[httpx.AsyncClient] = None
     backend_states: Dict[str, BackendRuntimeState] = field(default_factory=dict)
 
     def __post_init__(self):
