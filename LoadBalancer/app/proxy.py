@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import time
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 
 import httpx
 from fastapi import Request
@@ -81,6 +81,26 @@ def is_authorized(request: Request, expected_api_key: str | None) -> bool:
         return True
     provided_key = request.headers.get("x-api-key")
     return provided_key == expected_api_key
+
+
+def is_retryable_method(method: str, retry_methods: List[str]) -> bool:
+    return method.upper() in retry_methods
+
+
+def is_retyable_exception(exc: Exception) -> bool:
+    retryable_exceptions = (
+        httpx.ConnectTimeout,
+        httpx.ReadTimeout,
+        httpx.WriteTimeout,
+        httpx.PoolTimeout,
+        httpx.ConnectError,
+        httpx.RemoteProtocolError,
+    )
+    return isinstance(exc, retryable_exceptions)
+
+
+def calculate_retry_backoff_seconds(base_ms: int, attempt: int) -> float:
+    return (base_ms * (2 ** (attempt - 1))) / 1000.0
 
 
 async def proxy_request(request: Request):
@@ -174,129 +194,157 @@ async def proxy_request(request: Request):
             },
         )
 
-    backend = await get_next_backend(matched_service)
-
-    if not backend:
-
-        GATEWAY_NO_HEALTHY_BACKEND_COUNT.labels(
-            service=matched_service.name, path=request.url.path
-        ).inc()
-        logger.error(
-            "No healthy backend available for service",
-            extra={
-                "extra_data": {
-                    "event": "no_healthy_backend_for_service",
-                    "service": matched_service.name,
-                    "path": request.url.path,
-                }
-            },
-        )
-        return JSONResponse(
-            status_code=503,
-            content={
-                "error": "No healthy backend available",
-                "service": matched_service.name,
-            },
-        )
-
-    GATEWAY_BACKEND_SELECTED.labels(service=matched_service.name, backend=backend).inc()
-    target_url = httpx.URL(
-        url=f"{backend}{request.url.path}", params=request.query_params
+    retry_allowed = policy.retry_enabled and is_retryable_method(
+        request.method, policy.retry_on_methods
     )
 
-    headers = filter_headers(request.headers)
-    start_time = time.perf_counter()
+    max_attempts = policy.retry_max_attempts if retry_allowed else 1
 
-    try:
+    last_exception = None
+    last_backend = None
 
-        logger.info(
-            "Proxying request with service policy",
-            extra={
-                "extra_data": {
-                    "event": "proxy_request_started",
-                    "service": matched_service.name,
-                    "backend": backend,
-                    "method": request.method,
-                    "path": request.url.path,
-                    "service_policy": {
-                        "allowed_methods": policy.allowed_methods,
-                        "require_auth": policy.require_auth,
-                        "max_request_body_bytes": policy.max_request_body_bytes,
-                        "connect_timeout": policy.connect_timeout,
-                        "read_timeout": policy.read_timeout,
-                        "write_timeout": policy.write_timeout,
-                        "pool_timeout": policy.pool_timeout,
-                    },
-                    "request_headers": sanitize_headers_for_logging(headers),
-                }
-            },
-        )
+    for attempt in range(1, max_attempts + 1):
+        backend = get_next_backend(matched_service)
+        last_backend = backend
 
-        if matched_service.client is None:
+        if not backend:
+            GATEWAY_NO_HEALTHY_BACKEND_COUNT.labels(
+                service=matched_service.name, path=request.url.path
+            ).inc()
             return JSONResponse(
                 status_code=503,
                 content={
-                    "error": "Service HTTP client is not initialized",
+                    "error": "No healthy backend available",
                     "service": matched_service.name,
                 },
             )
 
-        upstream_response = await matched_service.client.request(
-            method=request.method, url=target_url, headers=headers, content=body
-        )
-        duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
-        response_headers = filter_headers(upstream_response.headers)
-
-        logger.info(
-            "Proxy request completed",
-            extra={
-                "extra_data": {
-                    "event": "proxy_request_completed",
-                    "service": matched_service.name,
-                    "backend": backend,
-                    "method": request.method,
-                    "path": request.url.path,
-                    "status_code": upstream_response.status_code,
-                    "duration_ms": duration_ms,
-                }
-            },
-        )
-
-        return Response(
-            content=upstream_response.content,
-            status_code=upstream_response.status_code,
-            headers=response_headers,
-            media_type=upstream_response.headers.get("content-type"),
-        )
-
-    except httpx.RequestError as exc:
-        GATEWAY_PROXY_FAILURE_COUNT.labels(
-            service=matched_service.name,
-            backend=backend,
-            method=request.method,
-            path=request.url.path,
-            error_type=exc.__class__.__name__,
+        GATEWAY_BACKEND_SELECTED.labels(
+            service=matched_service.name, backend=backend
         ).inc()
-        logger.exception(
-            "Proxy request failed",
-            extra={
-                "extra_data": {
-                    "event": "proxy_request_failed",
-                    "service": matched_service.name,
-                    "backend": backend,
-                    "method": request.method,
-                    "path": request.url.path,
-                    "error_type": exc.__class__.__name__,
-                }
-            },
+        target_url = httpx.URL(
+            url=f"{backend}{request.url.path}", params=request.query_params
         )
 
-        return JSONResponse(
-            status_code=502,
-            content={
-                "error": "Failed to forward request",
-                "service": matched_service.name,
-                "backend": backend,
-                "details": str(exc),
-            },
-        )
+        headers = filter_headers(request.headers)
+        start_time = time.perf_counter()
+
+        try:
+
+            logger.info(
+                "Proxying request with service policy",
+                extra={
+                    "extra_data": {
+                        "event": "proxy_request_started",
+                        "service": matched_service.name,
+                        "backend": backend,
+                        "method": request.method,
+                        "path": request.url.path,
+                        "service_policy": {
+                            "allowed_methods": policy.allowed_methods,
+                            "require_auth": policy.require_auth,
+                            "max_request_body_bytes": policy.max_request_body_bytes,
+                            "connect_timeout": policy.connect_timeout,
+                            "read_timeout": policy.read_timeout,
+                            "write_timeout": policy.write_timeout,
+                            "pool_timeout": policy.pool_timeout,
+                        },
+                        "request_headers": sanitize_headers_for_logging(headers),
+                    }
+                },
+            )
+
+            if matched_service.client is None:
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "error": "Service HTTP client is not initialized",
+                        "service": matched_service.name,
+                    },
+                )
+
+            upstream_response = await matched_service.client.request(
+                method=request.method, url=target_url, headers=headers, content=body
+            )
+            duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            response_headers = filter_headers(upstream_response.headers)
+
+            logger.info(
+                "Proxy request completed",
+                extra={
+                    "extra_data": {
+                        "event": "proxy_request_completed",
+                        "service": matched_service.name,
+                        "backend": backend,
+                        "method": request.method,
+                        "path": request.url.path,
+                        "status_code": upstream_response.status_code,
+                        "duration_ms": duration_ms,
+                    }
+                },
+            )
+
+            return Response(
+                content=upstream_response.content,
+                status_code=upstream_response.status_code,
+                headers=response_headers,
+                media_type=upstream_response.headers.get("content-type"),
+            )
+
+        except httpx.RequestError as exc:
+            last_exception = exc
+            GATEWAY_PROXY_FAILURE_COUNT.labels(
+                service=matched_service.name,
+                backend=backend,
+                method=request.method,
+                path=request.url.path,
+                error_type=exc.__class__.__name__,
+            ).inc()
+            retryable_error = is_retryable_exception(exc)
+            should_retry = retry_allowed and retryable_error and attempt < max_attempts
+            logger.exception(
+                "Proxy request failed",
+                extra={
+                    "extra_data": {
+                        "event": "proxy_request_failed",
+                        "service": matched_service.name,
+                        "backend": backend,
+                        "method": request.method,
+                        "path": request.url.path,
+                        "error_type": exc.__class__.__name__,
+                        "attempt": attempt,
+                        "max_attempts": max_attempts,
+                        "retryable_error": retryable_error,
+                        "should_retry": should_retry,
+                    }
+                },
+            )
+
+            if should_retry:
+                backoff_seconds = calculate_retry_backoff_seconds(
+                    policy.retry_backoff_ms, attempt
+                )
+                logger.warning(
+                    "Retrying request",
+                    extra={
+                        "extra_data": {
+                            "event": "proxy_retry_scheduled",
+                            "service": matched_service.name,
+                            "backend": backend,
+                            "attempt": attempt,
+                            "next_attempt": attempt + 1,
+                            "backoff_seconds": backoff_seconds,
+                        }
+                    },
+                )
+                await asyncio.sleep(backoff_seconds)
+                continue
+    return JSONResponse(
+        status_code=502,
+        content={
+            "error": "Failed to forward request",
+            "service": matched_service.name,
+            "backend": backend,
+            "details": str(exc),
+        },
+    )
