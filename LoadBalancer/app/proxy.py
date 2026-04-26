@@ -60,20 +60,63 @@ def sanitize_headers_for_logging(headers) -> dict[str, str]:
 
 
 async def get_next_backend(service_state) -> Optional[str]:
-    healthy_backends = [
-        backend
-        for backend in service_state.backends
-        if service_state.backend_states[backend].healthy
-    ]
+    available_backends = []
 
-    if not healthy_backends:
+    for backend in service_state.backends:
+        state = service_state.backend_states[backend]
+
+        if not state.healthy:
+            continue
+
+        if state.is_ejected():
+            continue
+
+        available_backends.append(backend)
+
+    if not available_backends:
         return None
 
     for _ in range(len(service_state.backends)):
         candidate = next(service_state.backend_cycle)
-        if candidate in healthy_backends:
+        candidate_state = service_state.backends[candidate]
+
+        if candidate in available_backends and not candidate_state.is_ejected():
             return candidate
+
     return None
+
+
+def record_backend_success(service_state, backend: str) -> None:
+    backend_state = service_state.backend_states[backend]
+    backend_state.consecutive_failures = 0
+    backend_state.ejected_until = None
+
+
+def record_backend_failure(service_state, backend: str) -> None:
+    policy = service_state.policy
+    backend_state = service_state.backend_states[backend]
+    backend_state.consecutive_failure += 1
+
+    if not policy.circuit_breaker_enabled:
+        return
+
+    if backend_state.consecutive_failures >= policy.circuit_breaker_failure_threshold:
+        backend_state.ejected_until = (
+            time.time() + policy.circuit_breaker_ejection_seconds
+        )
+        logger.error(
+            "Backend ejected by circuit breaker",
+            extra={
+                "extra_data": {
+                    "event": "backend_ejected",
+                    "service": service_state.name,
+                    "backend": backend,
+                    "consecutive_failures": backend_state.consecutive_failures,
+                    "ejection_seconds": policy.circuit_breaker_ejection_seconds,
+                    "ejected_until": backend_state.ejected_until,
+                }
+            },
+        )
 
 
 def is_authorized(request: Request, expected_api_key: str | None) -> bool:
@@ -87,7 +130,7 @@ def is_retryable_method(method: str, retry_methods: List[str]) -> bool:
     return method.upper() in retry_methods
 
 
-def is_retyable_exception(exc: Exception) -> bool:
+def is_retryable_exception(exc: Exception) -> bool:
     retryable_exceptions = (
         httpx.ConnectTimeout,
         httpx.ReadTimeout,
@@ -268,6 +311,7 @@ async def proxy_request(request: Request):
             )
             duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
             response_headers = filter_headers(upstream_response.headers)
+            record_backend_success(matched_service, backend)
 
             logger.info(
                 "Proxy request completed",
@@ -300,6 +344,7 @@ async def proxy_request(request: Request):
                 path=request.url.path,
                 error_type=exc.__class__.__name__,
             ).inc()
+            record_backend_failure(matched_service, backend)
             retryable_error = is_retryable_exception(exc)
             should_retry = retry_allowed and retryable_error and attempt < max_attempts
             logger.exception(

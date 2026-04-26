@@ -160,7 +160,12 @@ async def show_routes(request: Request):
                     "pool_timeout": service_state.policy.pool_timeout,
                 },
                 "backends": {
-                    backend: {"healthy": state.healthy}
+                    backend: {
+                        "healthy": state.healthy,
+                        "consecutive_failures": state.consecutive_failures,
+                        "ejected": state.is_ejected(),
+                        "ejected_until": state.ejected_until,
+                    }
                     for backend, state in service_state.backend_states.items()
                 },
             }
