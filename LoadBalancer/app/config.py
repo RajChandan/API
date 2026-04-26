@@ -20,6 +20,10 @@ class ServicePolicy(BaseModel):
     retry_backoff_ms: int = 200
     retry_on_methods: List[str] = Field(default=["GET", "HEAD", "OPTIONS"])
 
+    circuit_breaker_enabled: bool = True
+    circuit_breaker_failure_threshold: int = 3
+    circuit_breaker_ejection_seconds: int = 30
+
     @field_validator("allowed_methods")
     @classmethod
     def validate_allowed_methods(cls, value: List[str]) -> List[str]:
@@ -72,6 +76,15 @@ class ServicePolicy(BaseModel):
                 normalized.append(method)
                 seen.add(method)
         return normalized
+
+    @field_validator(
+        "circuit_breaker_failure_threshold", "circuit_breaker_ejection_seconds"
+    )
+    @classmethod
+    def validate_circuit_breaker_ints(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("Circuit breaker value must be greater than 0")
+        return value
 
 
 class ServiceConfig(BaseModel):

@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 from itertools import cycle
 from typing import Dict, List, Optional
 import httpx
+import time
 
 from app.config import ServicePolicy
 
@@ -9,6 +10,19 @@ from app.config import ServicePolicy
 @dataclass
 class BackendRuntimeState:
     healthy: bool = True
+    consecutive_failure: int = 0
+    ejected_until: Optional[float] = None
+
+    def is_ejected(self) -> bool:
+        if self.ejected_until is None:
+            return False
+
+        if time.time() >= self.ejected_until:
+            self.ejected_until = None
+            self.consecutive_failure = 0
+            return False
+
+        return True
 
 
 @dataclass
