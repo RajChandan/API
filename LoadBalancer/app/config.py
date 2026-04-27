@@ -127,6 +127,10 @@ class Settings(BaseSettings):
     app_port: int = 8080
     gateway_api_key: Optional[str] = "super-secret-gateway-key"
     admin_token: str = "super-secret-admin-token"
+
+    jwt_secret_key: str = "dev-secret-change-me"
+    jwt_algorithm: str = "HS256"
+
     services: List[ServiceConfig] = Field(
         default=[
             ServiceConfig(
