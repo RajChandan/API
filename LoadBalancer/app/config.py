@@ -126,6 +126,7 @@ class Settings(BaseSettings):
     app_host: str = "0.0.0.0"
     app_port: int = 8080
     gateway_api_key: Optional[str] = "super-secret-gateway-key"
+    admin_token: str = "super-secret-admin-token"
     services: List[ServiceConfig] = Field(
         default=[
             ServiceConfig(

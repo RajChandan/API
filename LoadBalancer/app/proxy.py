@@ -4,7 +4,7 @@ import time
 from typing import Optional, Dict, List
 
 import httpx
-from fastapi import Request
+from fastapi import Request, Header, HTTPException
 from fastapi.responses import JSONResponse, Response
 
 from app.metrics import (

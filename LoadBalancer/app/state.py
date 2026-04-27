@@ -10,7 +10,7 @@ from app.config import ServicePolicy
 @dataclass
 class BackendRuntimeState:
     healthy: bool = True
-    consecutive_failure: int = 0
+    consecutive_failures: int = 0
     ejected_until: Optional[float] = None
 
     def is_ejected(self) -> bool:

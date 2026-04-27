@@ -6,7 +6,7 @@ import uuid
 from contextlib import asynccontextmanager
 
 import httpx
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, Request, Response, Header, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -39,12 +39,21 @@ def build_gateway_state(settings) -> GatewayState:
         services[service.name] = ServiceRuntimeState(
             name=service.name,
             prefix=service.prefix,
-            backend=service.backends,
+            backends=service.backends,
             policy=service.policy,
             client=client,
         )
 
     return GatewayState(services=services)
+
+
+def verify_admin_token(
+    request: Request, x_admin_token: str | None = Header(default=None)
+):
+    expected_token = request.app.state.settings.admin_token
+
+    if x_admin_token != expected_token:
+        raise HTTPException(status_code=401, detail="Unauthorized admin access")
 
 
 @asynccontextmanager
@@ -142,7 +151,7 @@ async def metrics_middleware(request: Request, call_next):
     return response
 
 
-@app.get("/gateway/routes")
+@app.get("/gateway/routes", dependencies=[Depends(verify_admin_token)])
 async def show_routes(request: Request):
     gateway_state = request.app.state.gateway_state
 
@@ -174,7 +183,7 @@ async def show_routes(request: Request):
     }
 
 
-@app.get("/gateway/metrics")
+@app.get("/gateway/metrics", dependencies=[Depends(verify_admin_token)])
 async def gateway_metrics():
     content, content_type = render_metrics()
     return Response(content=content, media_type=content_type)
