@@ -15,6 +15,7 @@ from app.metrics import (
 )
 
 from app.router import match_service
+from app.auth import AuthError, authenticate_request, build_identity_headers
 
 logger = logging.getLogger("api_gateway.proxy")
 
@@ -78,7 +79,7 @@ async def get_next_backend(service_state) -> Optional[str]:
 
     for _ in range(len(service_state.backends)):
         candidate = next(service_state.backend_cycle)
-        candidate_state = service_state.backends[candidate]
+        candidate_state = service_state.backend_states[candidate]
 
         if candidate in available_backends and not candidate_state.is_ejected():
             return candidate
@@ -194,24 +195,33 @@ async def proxy_request(request: Request):
             },
         )
 
-    if policy.require_auth and not is_authorized(
-        request, app.state.settings.gateway_api_key
-    ):
-        logger.warning(
-            "Unauthorized request for protected service",
-            extra={
-                "extra_data": {
-                    "event": "service_auth_failed",
+    identity_headers = {}
+    if policy.require_auth:
+        try:
+            jwt_payload = authenticate_request(request)
+            identity_headers = build_identity_headers(jwt_payload)
+
+        except AuthError as exc:
+            logger.warning(
+                "JWT authentication failed",
+                extra={
+                    "extra_data": {
+                        "event": "jwt_auth_failed",
+                        "service": matched_service.name,
+                        "method": request.method,
+                        "path": request.url.path,
+                        "reason": str(exc),
+                    }
+                },
+            )
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "error": "Unauthorized",
                     "service": matched_service.name,
-                    "method": request.method,
-                    "path": request.url.path,
-                }
-            },
-        )
-        return JSONResponse(
-            status_code=401,
-            content={"error": "Unauthorized", "service": matched_service.name},
-        )
+                    "reason": str(exc),
+                },
+            )
 
     body = await request.body()
     if len(body) > policy.max_request_body_bytes:
@@ -247,7 +257,7 @@ async def proxy_request(request: Request):
     last_backend = None
 
     for attempt in range(1, max_attempts + 1):
-        backend = get_next_backend(matched_service)
+        backend = await get_next_backend(matched_service)
         last_backend = backend
 
         if not backend:
@@ -270,6 +280,7 @@ async def proxy_request(request: Request):
         )
 
         headers = filter_headers(request.headers)
+        headers.update(identity_headers)
         start_time = time.perf_counter()
 
         try:

@@ -43,7 +43,7 @@ def authenticate_request(request: Request) -> Dict[str, Any]:
     return verify_jwt_token(
         token=token,
         secret_key=settings.jwt_secret_key,
-        algorithm=settings.jwt_algorithms,
+        algorithm=settings.jwt_algorithm,
     )
 
 
