@@ -9,6 +9,7 @@ class ServicePolicy(BaseModel):
         default=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
     )
     require_auth: bool = False
+    strip_prefix: bool = True
     max_request_body_bytes: int = 1_048_576
 
     connect_timeout: float = 3.0
@@ -91,7 +92,7 @@ class ServiceConfig(BaseModel):
     name: str
     prefix: str
     backends: List[str]
-    policy: ServicePolicy = Field(defult_factory=ServicePolicy)
+    policy: ServicePolicy = Field(default_factory=ServicePolicy)
 
     @field_validator("prefix")
     @classmethod
@@ -120,7 +121,7 @@ class ServiceConfig(BaseModel):
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", case_sensetive=False, extra="ignore"
+        env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
     )
     app_name: str = "API Gateway"
     app_host: str = "0.0.0.0"

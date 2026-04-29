@@ -147,6 +147,13 @@ def calculate_retry_backoff_seconds(base_ms: int, attempt: int) -> float:
     return (base_ms * (2 ** (attempt - 1))) / 1000.0
 
 
+def build_target_path(service_state,request_path :str) -> str:
+    if service_state.policy.strip_prefix:
+        stripped = request_path[len(service_state.prefix):]
+        return stripped if stripped else "/"
+    return request_path
+    
+
 async def proxy_request(request: Request):
     app = request.app
     gateway_state = app.state.gateway_state
@@ -275,8 +282,9 @@ async def proxy_request(request: Request):
         GATEWAY_BACKEND_SELECTED.labels(
             service=matched_service.name, backend=backend
         ).inc()
+        target_path = build_target_path(matched_service,request.url.path)
         target_url = httpx.URL(
-            url=f"{backend}{request.url.path}", params=request.query_params
+            url=f"{backend}{target_path}", params=request.query_params
         )
 
         headers = filter_headers(request.headers)
@@ -294,6 +302,7 @@ async def proxy_request(request: Request):
                         "backend": backend,
                         "method": request.method,
                         "path": request.url.path,
+                        "target_path":target_path,
                         "service_policy": {
                             "allowed_methods": policy.allowed_methods,
                             "require_auth": policy.require_auth,
