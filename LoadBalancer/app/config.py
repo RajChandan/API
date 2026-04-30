@@ -105,7 +105,7 @@ class GatewayConfig(BaseModel):
         names = set()
         prefixes = set()
         for service in value:
-            if service,name in names:
+            if service.name in names:
                 raise ValueError(f"Duplicate service name : {service.name} ")
             names.add(service.name)
 
@@ -123,53 +123,35 @@ class Settings(BaseSettings):
     app_name: str = "API Gateway"
     app_host: str = "0.0.0.0"
     app_port: int = 8080
-    gateway_config_file : str = "gateway.yaml"
+    gateway_config_file : str = "app/gateway.yaml"
     
     admin_token: str = "super-secret-admin-token"
 
     jwt_secret_key: str = "dev-secret-change-me"
     jwt_algorithm: str = "HS256"
 
-    services: List[ServiceConfig] = Field(
-        default=[
-            ServiceConfig(
-                name="user-service",
-                prefix="/users",
-                backends=[
-                    "http://127.0.0.1:9001",
-                    "http://127.0.0.1:9002",
-                ],
-                policy=ServicePolicy(
-                    allowed_methods=["GET", "POST"],
-                    require_auth=False,
-                    max_request_body_bytes=512_000,
-                    connect_timeout=2.0,
-                    read_timeout=5.0,
-                    write_timeout=5.0,
-                    pool_timeout=3.0,
-                ),
-            ),
-            ServiceConfig(
-                name="order-service",
-                prefix="/orders",
-                backends=[
-                    "http://127.0.0.1:9011",
-                    "http://127.0.0.1:9012",
-                ],
-                policy=ServicePolicy(
-                    allowed_methods=["GET", "POST", "DELETE"],
-                    require_auth=True,
-                    max_request_body_bytes=1_048_576,
-                    connect_timeout=3.0,
-                    read_timeout=10.0,
-                    write_timeout=10.0,
-                    pool_timeout=5.0,
-                ),
-            ),
-        ]
-    )
+    
 
+def load_gateway_config(config_file:str) -> GatewayConfig:
+    path = Path(config_file)
+
+    if not path.exists():
+        raise FileNotFoundError(f"Gateway config file not found : {config_file}")
+    
+    with path.open("r",encoding="utf-8") as file:
+        raw_config = yaml.safe_load(file)
+
+    if not raw_config:
+        raise ValueError(f"Gateway config file is empty : {config_file}")
+
+    return GatewayConfig(**raw_config)
 
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+@lru_cache
+def get_gateway_config() -> GatewayConfig:
+    settings = get_settings()
+    return load_gateway_config(settings.gateway_config_file)
+

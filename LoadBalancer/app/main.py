@@ -10,7 +10,7 @@ from fastapi import FastAPI, Request, Response, Header, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from app.config import get_settings
+from app.config import get_settings,get_gateway_config
 from app.health import health_check_loop
 from app.logging_config import configure_logging
 
@@ -24,10 +24,10 @@ from app.state import GatewayState, ServiceRuntimeState
 logger = logging.getLogger("api_gateway.main")
 
 
-def build_gateway_state(settings) -> GatewayState:
+def build_gateway_state(gateway_config) -> GatewayState:
     services = {}
 
-    for service in settings.services:
+    for service in gateway_config.services:
         timeout = httpx.Timeout(
             connect=service.policy.connect_timeout,
             read=service.policy.read_timeout,
@@ -67,7 +67,8 @@ async def lifespan(app: FastAPI):
     )
 
     app.state.settings = settings
-    app.state.gateway_state = build_gateway_state(settings)
+    gateway_config = get_gateway_config()
+    app.state.gateway_state = build_gateway_state(gateway_config)
 
     app.state.health_client = httpx.AsyncClient(timeout=2.0, follow_redirects=False)
 
@@ -83,17 +84,9 @@ async def lifespan(app: FastAPI):
                         "name": service.name,
                         "prefix": service.prefix,
                         "backends": service.backends,
-                        "policy": {
-                            "allowed_methods": service.policy.allowed_methods,
-                            "require_auth": service.policy.require_auth,
-                            "max_request_body_bytes": service.policy.max_request_body_bytes,
-                            "connect_timeout": service.policy.connect_timeout,
-                            "read_timeout": service.policy.read_timeout,
-                            "write_timeout": service.policy.write_timeout,
-                            "pool_timeout": service.policy.pool_timeout,
-                        },
+                        "policy":service.policy.model_dump(),
                     }
-                    for service in settings.services
+                    for service in gateway_config.services
                 ],
             }
         },
