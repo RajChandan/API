@@ -1,4 +1,6 @@
 from functools import lru_cache
+from pathlib import Path
+import yaml
 from typing import List, Optional
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -25,21 +27,27 @@ class ServicePolicy(BaseModel):
     circuit_breaker_failure_threshold: int = 3
     circuit_breaker_ejection_seconds: int = 30
 
-    @field_validator("allowed_methods")
+    @field_validator("allowed_methods","retry_on_methods")
     @classmethod
     def validate_allowed_methods(cls, value: List[str]) -> List[str]:
         if not value:
             raise ValueError("allowed_methods must not be empty")
 
         allowed = {"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"}
+        normalized = []
+        seen = set()
 
-        normalized = [method.upper().strip() for method in value]
+        for method in value:
+            method = method.upper().strip()
 
-        for method in normalized:
             if method not in allowed:
                 raise ValueError(f"Unsupported HTTP method : {method}")
+            
+            if method not in seen:
+                normalized.append(method)
+                seen.add(method)        
         return normalized
-
+        
     @field_validator("connect_timeout", "read_timeout", "write_timeout", "pool_timeout")
     @classmethod
     def validate_timeouts(cls, value: float) -> float:
@@ -47,44 +55,11 @@ class ServicePolicy(BaseModel):
             raise ValueError("Timeout value must be greater than 0")
         return value
 
-    @field_validator("max_request_body_bytes")
+    @field_validator("max_request_body_bytes","retry_max_attempts","retry_backoff_ms","circuit_breaker_failure_threshold","circuit_breaker_ejection_seconds")
     @classmethod
-    def validate_body_limit(cls, value: int) -> int:
+    def validate_positive_ints(cls, value: int) -> int:
         if value <= 0:
-            raise ValueError("max_request_body_bytes must be greater than 0")
-        return value
-
-    @field_validator("retry_max_attempts", "retry_backoff_ms")
-    @classmethod
-    def validate_retry_ints(cls, value: int) -> int:
-        if value <= 0:
-            raise ValueError("Retry value mus be greater than 0")
-        return value
-
-    @field_validator("retry_on_methods")
-    @classmethod
-    def validate_retry_methods(cls, value: List[str]) -> List[str]:
-        allowed = {"GET", "HEAD", "OPTIONS", "PUT", "DELETE"}
-        normalized = []
-        seen = set()
-
-        for method in value:
-            method = method.upper().strip()
-            if method not in allowed:
-                raise ValueError(f"Unsupported retry method : {method}")
-
-            if method not in seen:
-                normalized.append(method)
-                seen.add(method)
-        return normalized
-
-    @field_validator(
-        "circuit_breaker_failure_threshold", "circuit_breaker_ejection_seconds"
-    )
-    @classmethod
-    def validate_circuit_breaker_ints(cls, value: int) -> int:
-        if value <= 0:
-            raise ValueError("Circuit breaker value must be greater than 0")
+            raise ValueError("Value must be greater than 0")
         return value
 
 
@@ -99,7 +74,7 @@ class ServiceConfig(BaseModel):
     def validate_prefix(cls, value: str) -> str:
         if not value.startswith("/"):
             raise ValueError("Service prefix must start with '/'")
-        return value.rstrip("/")
+        return value.rstrip("/") or "/"
 
     @field_validator("backends")
     @classmethod
@@ -119,6 +94,28 @@ class ServiceConfig(BaseModel):
         return cleaned
 
 
+class GatewayConfig(BaseModel):
+    services: List[ServiceConfig]
+
+    @field_validator("services")
+    @classmethod
+    def validate_services(cls,value:List[ServiceConfig]) -> List[ServiceConfig]:
+        if not value:
+            raise ValueError("At least one service must be configured")
+        names = set()
+        prefixes = set()
+        for service in value:
+            if service,name in names:
+                raise ValueError(f"Duplicate service name : {service.name} ")
+            names.add(service.name)
+
+            if service.prefix in prefixes:
+                raise ValueError(f"Duplicate service prefix : {service.prefix}")
+            prefixes.add(service.prefix)
+
+        return value
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore"
@@ -126,7 +123,8 @@ class Settings(BaseSettings):
     app_name: str = "API Gateway"
     app_host: str = "0.0.0.0"
     app_port: int = 8080
-    gateway_api_key: Optional[str] = "super-secret-gateway-key"
+    gateway_config_file : str = "gateway.yaml"
+    
     admin_token: str = "super-secret-admin-token"
 
     jwt_secret_key: str = "dev-secret-change-me"
