@@ -19,7 +19,7 @@ class BackendRuntimeState:
 
         if time.time() >= self.ejected_until:
             self.ejected_until = None
-            self.consecutive_failure = 0
+            self.consecutive_failures = 0
             return False
 
         return True

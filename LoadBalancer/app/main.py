@@ -110,7 +110,7 @@ async def lifespan(app: FastAPI):
 
     app.state.health_task.cancel()
     try:
-        await app.state.health_check
+        await app.state.health_task
     except asyncio.CancelledError:
         pass
     await app.state.health_client.aclose()

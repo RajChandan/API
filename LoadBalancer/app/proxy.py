@@ -96,7 +96,7 @@ def record_backend_success(service_state, backend: str) -> None:
 def record_backend_failure(service_state, backend: str) -> None:
     policy = service_state.policy
     backend_state = service_state.backend_states[backend]
-    backend_state.consecutive_failure += 1
+    backend_state.consecutive_failures += 1
 
     if not policy.circuit_breaker_enabled:
         return
@@ -410,6 +410,6 @@ async def proxy_request(request: Request):
             "error": "Failed to forward request",
             "service": matched_service.name,
             "backend": backend,
-            "details": str(exc),
+            "details": str(last_exception),
         },
     )

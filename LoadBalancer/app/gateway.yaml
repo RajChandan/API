@@ -1,0 +1,63 @@
+services:
+  - name: user-service
+    prefix: /users
+    backends:
+      - http://127.0.0.1:9001
+      - http://127.0.0.1:9002
+    policy:
+      allowed_methods:
+        - GET
+        - POST
+      require_auth: false
+      strip_prefix: true
+      max_request_body_bytes: 512000
+
+      connect_timeout: 2.0
+      read_timeout: 5.0
+      write_timeout: 5.0
+      pool_timeout: 3.0
+
+      retry_enabled: true
+      retry_max_attempts: 2
+      retry_backoff_ms: 200
+      retry_on_methods:
+        - GET
+        - HEAD
+        - OPTIONS
+      
+      circuit_breaker_enabled: true
+      circuit_breaker_failure_threshold: 3
+      circuit_breaker_ejection_seconds: 30
+
+  - name: order-service
+    prefix: /orders
+    backends:
+      - http://127.0.0.1:9011
+      - http://127.0.0.1:9012
+
+    policy:
+      allowed_methods:
+        - GET
+        - POST
+        - DELETE
+      require_auth: true
+      strip_prefix: true
+      max_request_body_bytes: 1048576
+
+      connect_timeout: 3.0
+      read_timeout: 10.0
+      write_timeout: 10.0
+      pool_timeout: 5.0
+
+      retry_enabled: true
+      retry_max_attempts: 2
+      retry_backoff_ms: 200
+      retry_on_methods:
+        - GET
+        - HEAD
+        - OPTIONS
+      
+      circuit_breaker_enabled: true
+      circuit_breaker_failure_threshold: 3
+      circuit_breaker_ejection_seconds: 30
+    
