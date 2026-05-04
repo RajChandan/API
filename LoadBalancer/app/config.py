@@ -27,6 +27,10 @@ class ServicePolicy(BaseModel):
     circuit_breaker_failure_threshold: int = 3
     circuit_breaker_ejection_seconds: int = 30
 
+    rate_limit_enabled: bool = True
+    rate_limit_requests: int = 100
+    rate_limit_window_seconds: int = 60
+
     @field_validator("allowed_methods","retry_on_methods")
     @classmethod
     def validate_allowed_methods(cls, value: List[str]) -> List[str]:
@@ -61,6 +65,16 @@ class ServicePolicy(BaseModel):
         if value <= 0:
             raise ValueError("Value must be greater than 0")
         return value
+
+    
+    @field_validator("rate_limit_requests","rate_limit_window_seconds")
+    @classmethod
+    def validate_rate_limit_ints(cls,value:int) -> int:
+        if value <= 0:
+            raise ValueError("Rate limit value must be greater than 0")
+        return value
+
+        
 
 
 class ServiceConfig(BaseModel):
@@ -130,7 +144,7 @@ class Settings(BaseSettings):
     jwt_secret_key: str = "dev-secret-change-me"
     jwt_algorithm: str = "HS256"
 
-    
+    redis_url : str = "redis://127.0.0.1:6379/0"
 
 def load_gateway_config(config_file:str) -> GatewayConfig:
     path = Path(config_file)

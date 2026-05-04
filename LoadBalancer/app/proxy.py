@@ -148,9 +148,18 @@ def calculate_retry_backoff_seconds(base_ms: int, attempt: int) -> float:
 
 
 def build_target_path(service_state,request_path :str) -> str:
-    if service_state.policy.strip_prefix:
-        stripped = request_path[len(service_state.prefix):]
-        return stripped if stripped else "/"
+    if not service_state.policy.strip_prefix:
+        return request_path
+    
+    prefix = service_state.prefix
+
+    if request_path == prefix:
+        return "/"
+
+    if request_path.startswith(prefix+"/"):
+        stripped_path = request_path[len(prefix):]
+        return stripped_path or "/"
+    
     return request_path
     
 
