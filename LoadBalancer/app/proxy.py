@@ -17,6 +17,7 @@ from app.metrics import (
 from app.router import match_service
 from app.auth import AuthError, authenticate_request, build_identity_headers
 
+from app.rate_limit import enforce_rate_limit
 logger = logging.getLogger("api_gateway.proxy")
 
 HOP_BY_HOP_HEADERS = {
@@ -239,6 +240,12 @@ async def proxy_request(request: Request):
                 },
             )
 
+    rate_limit_response = await enforce_rate_limit(request,matched_service)
+    if rate_limit_response:
+        return rate_limit_response
+
+    
+
     body = await request.body()
     if len(body) > policy.max_request_body_bytes:
         logger.warning(
@@ -357,12 +364,19 @@ async def proxy_request(request: Request):
                 },
             )
 
-            return Response(
-                content=upstream_response.content,
+            response = Response(content=upstream_response.content,
                 status_code=upstream_response.status_code,
                 headers=response_headers,
-                media_type=upstream_response.headers.get("content-type"),
-            )
+                media_type=upstream_response.headers.get("content-type"),)
+
+            rate_headers = getattr(request.state,"rate_limit_headers",{})
+
+            for key,value in rate_headers.items():
+                response.headers[key] = value
+
+            return response
+            
+
 
         except httpx.RequestError as exc:
             last_exception = exc

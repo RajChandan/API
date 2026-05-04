@@ -2,7 +2,7 @@ import asyncio
 import logging
 import time
 import uuid
-
+import redis.asyncio as redis
 from contextlib import asynccontextmanager
 
 import httpx
@@ -72,6 +72,7 @@ async def lifespan(app: FastAPI):
 
     app.state.health_client = httpx.AsyncClient(timeout=2.0, follow_redirects=False)
 
+    app.state.redis_client = redis.from_url(settings.redis_url,decode_responses=True)
     # app.state.proxy_client = httpx.AysyncClient(timeout=10.0, follows_redirects=False)
 
     logger.info(
@@ -107,6 +108,7 @@ async def lifespan(app: FastAPI):
     except asyncio.CancelledError:
         pass
     await app.state.health_client.aclose()
+    await app.state.redis_client.aclose()
 
     for service_state in app.state.gateway_state.services.values():
         if service_state.client:
