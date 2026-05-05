@@ -30,8 +30,11 @@ services:
       circuit_breaker_ejection_seconds: 30
 
       rate_limit_enabled: true
-      rate_limit_requests: 100
+      rate_limit_requests: 10
       rate_limit_window_seconds: 60
+
+      required_roles: []
+      required_scopes: []
 
   - name: order-service
     prefix: /orders
@@ -68,4 +71,7 @@ services:
       rate_limit_enabled: true
       rate_limit_requests: 100
       rate_limit_window_seconds: 60
+
+      required_roles: []
+      required_scopes: []
     

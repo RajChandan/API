@@ -8,6 +8,28 @@ class AuthError(Exception):
     pass
 
 
+def authorize_payload(payload:Dict[str,Any],required_roles:list[str],required_scopes:list[str]) -> None:
+    token_roles = payload.get("roles",[])
+    token_scopes = payload.get("scopes",[])
+
+    if isinstance(token_roles,str):
+        token_roles = [token_roles]
+
+    if isinstance(token_scopes,str):
+        token_scopes = token_scopes.split()
+
+    missing_roles = [role for role in required_roles if role not in token_roles]
+
+    missing_scopes = [scope for scope in required_scopes if scope not in token_scopes]
+
+    if missing_roles:
+        raise AuthError(f"Missing required roles : {missing_roles}")
+    
+    if missing_scopes:
+        raise AuthError(f"missing required scopes: {missing_scopes}")
+    
+
+
 def extract_bearer_token(request: Request) -> Optional[str]:
     auth_header = request.headers.get("authorization")
 

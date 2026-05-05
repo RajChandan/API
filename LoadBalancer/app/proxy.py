@@ -15,7 +15,7 @@ from app.metrics import (
 )
 
 from app.router import match_service
-from app.auth import AuthError, authenticate_request, build_identity_headers
+from app.auth import AuthError, authenticate_request, build_identity_headers,authorize_payload
 
 from app.rate_limit import enforce_rate_limit
 logger = logging.getLogger("api_gateway.proxy")
@@ -216,8 +216,12 @@ async def proxy_request(request: Request):
     if policy.require_auth:
         try:
             jwt_payload = authenticate_request(request)
+
+            authorize_payload(payload=jwt_payload,required_roles=policy.required_roles,required_scopes=policy.required_scopes)
+
             identity_headers = build_identity_headers(jwt_payload)
 
+            request.state.user_id = jwt_payload.get("sub")
         except AuthError as exc:
             logger.warning(
                 "JWT authentication failed",

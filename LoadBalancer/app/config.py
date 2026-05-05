@@ -31,6 +31,9 @@ class ServicePolicy(BaseModel):
     rate_limit_requests: int = 100
     rate_limit_window_seconds: int = 60
 
+    required_roles : List[str] = Field(default=[])
+    required_scopes : List[str] = Field(default=[])
+
     @field_validator("allowed_methods","retry_on_methods")
     @classmethod
     def validate_allowed_methods(cls, value: List[str]) -> List[str]:
@@ -74,7 +77,7 @@ class ServicePolicy(BaseModel):
             raise ValueError("Rate limit value must be greater than 0")
         return value
 
-        
+
 
 
 class ServiceConfig(BaseModel):
