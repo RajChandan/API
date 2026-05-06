@@ -46,3 +46,137 @@ This is a fast, asynchronous API Gateway and Load Balancer built with FastAPI. I
 *   **Health Checks:** Automatically monitors backend health and ejects failing nodes.
 *   **Authentication:** JWT-based protection for configured routes.
 *   **Timeouts & Retries:** Configurable connection, read, and write timeouts with retry mechanisms.
+
+
+
+                                   ┌──────────────────────┐
+                                   │      CLIENTS         │
+                                   │  Web / Mobile / API  │
+                                   └──────────┬───────────┘
+                                              │
+                                              ▼
+                         ┌────────────────────────────────────┐
+                         │         FASTAPI API GATEWAY        │
+                         │                                    │
+                         │  ┌──────────────────────────────┐  │
+                         │  │         Routing Layer        │  │
+                         │  │  /users  → user-service      │  │
+                         │  │  /orders → order-service     │  │
+                         │  └──────────────┬───────────────┘  │
+                         │                 │                  │
+                         │                 ▼                  │
+                         │  ┌──────────────────────────────┐  │
+                         │  │       Auth Layer             │  │
+                         │  │                              │  │
+                         │  │  JWT Validation              │  │
+                         │  │  Role/Scope Authorization    │  │
+                         │  │  Identity Header Injection   │  │
+                         │  └──────────────┬───────────────┘  │
+                         │                 │                  │
+                         │                 ▼                  │
+                         │  ┌──────────────────────────────┐  │
+                         │  │      Policy Engine           │  │
+                         │  │                              │  │
+                         │  │  Allowed Methods             │  │
+                         │  │  Strip Prefix                │  │
+                         │  │  Body Size Limits            │  │
+                         │  │  Retry Policy                │  │
+                         │  │  Circuit Breaker             │  │
+                         │  │  Rate Limiting               │  │
+                         │  └──────────────┬───────────────┘  │
+                         │                 │                  │
+                         │                 ▼                  │
+                         │  ┌──────────────────────────────┐  │
+                         │  │      Load Balancer           │  │
+                         │  │                              │  │
+                         │  │  Round Robin Selection       │  │
+                         │  │  Health Checks               │  │
+                         │  │  Backend Ejection            │  │
+                         │  └──────────────┬───────────────┘  │
+                         │                 │                  │
+                         │                 ▼                  │
+                         │  ┌──────────────────────────────┐  │
+                         │  │      Shared HTTP Clients     │  │
+                         │  │  Persistent Connection Pool  │  │
+                         │  └──────────────┬───────────────┘  │
+                         └─────────────────┼──────────────────┘
+                                           │
+               ┌───────────────────────────┼───────────────────────────┐
+               │                           │                           │
+               ▼                           ▼                           ▼
+
+   ┌──────────────────┐      ┌──────────────────┐       ┌──────────────────┐
+   │  USER BACKEND 1  │      │  USER BACKEND 2  │       │ ORDER BACKEND 1  │
+   │  localhost:9001  │      │  localhost:9002  │       │ localhost:9011   │
+   └──────────────────┘      └──────────────────┘       └──────────────────┘
+                                                                  │
+                                                                  ▼
+                                                    ┌──────────────────┐
+                                                    │ ORDER BACKEND 2  │
+                                                    │ localhost:9012   │
+                                                    └──────────────────┘
+
+
+
+─────────────────────────────────────────────────────────────────────────────
+                        SUPPORTING INFRASTRUCTURE
+─────────────────────────────────────────────────────────────────────────────
+
+               ┌────────────────────────────────────────┐
+               │                REDIS                   │
+               │                                        │
+               │  Distributed Rate Limiting             │
+               │  Shared State Across Workers           │
+               │  Shared State Across Containers        │
+               └────────────────────────────────────────┘
+
+
+               ┌────────────────────────────────────────┐
+               │          OBSERVABILITY                 │
+               │                                        │
+               │  JSON Structured Logs                  │
+               │  Prometheus Metrics                    │
+               │  Request Duration Metrics              │
+               │  Backend Health Metrics                │
+               │  Retry Metrics                         │
+               │  Circuit Breaker Metrics               │
+               └────────────────────────────────────────┘
+
+
+─────────────────────────────────────────────────────────────────────────────
+                            CONFIGURATION
+─────────────────────────────────────────────────────────────────────────────
+
+               ┌────────────────────────────────────────┐
+               │              gateway.yaml              │
+               │                                        │
+               │  Services                              │
+               │  Routes                                │
+               │  Policies                              │
+               │  Retry Config                          │
+               │  Circuit Breaker Config                │
+               │  Rate Limit Config                     │
+               │  Auth Config                           │
+               └────────────────────────────────────────┘
+
+
+─────────────────────────────────────────────────────────────────────────────
+                           CURRENT FEATURES
+─────────────────────────────────────────────────────────────────────────────
+
+✅ Dynamic service routing
+✅ YAML-based config
+✅ JWT authentication
+✅ Role/scope authorization
+✅ Admin endpoint protection
+✅ Shared async HTTP clients
+✅ Health checks
+✅ Circuit breaker
+✅ Retry policy
+✅ Strip prefix/path rewrite
+✅ Redis distributed rate limiting
+✅ Structured JSON logging
+✅ Prometheus metrics
+✅ Round-robin balancing
+✅ Backend health tracking
+✅ Graceful startup/shutdown
