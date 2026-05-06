@@ -149,6 +149,11 @@ class Settings(BaseSettings):
 
     redis_url : str = "redis://127.0.0.1:6379/0"
 
+    otel_enabled : bool = True
+    otel_service_name : str = "fastapi-api-gateway" 
+    otel_exporter_otlp_endpoint : str = "http://127.0.0.1:4318"
+    otel_console_exporter_enabled: bool = True   
+
 def load_gateway_config(config_file:str) -> GatewayConfig:
     path = Path(config_file)
 
