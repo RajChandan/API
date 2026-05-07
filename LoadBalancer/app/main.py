@@ -20,6 +20,8 @@ from app.proxy import proxy_request
 from app.router import match_service
 from app.state import GatewayState, ServiceRuntimeState
 
+from app.telemetry import setup_telemetry
+
 
 logger = logging.getLogger("api_gateway.main")
 
@@ -121,6 +123,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=get_settings().app_name, lifespan=lifespan)
+setup_telemetry(app,get_settings())
 
 
 @app.middleware("http")

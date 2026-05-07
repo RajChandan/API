@@ -18,6 +18,8 @@ from app.router import match_service
 from app.auth import AuthError, authenticate_request, build_identity_headers,authorize_payload
 
 from app.rate_limit import enforce_rate_limit
+from app.telemetry import get_tracer
+
 logger = logging.getLogger("api_gateway.proxy")
 
 HOP_BY_HOP_HEADERS = {
@@ -40,6 +42,9 @@ SENSETIVE_HEADERS = {
     "x-api-key",
     "proxy-authorization",
 }
+
+
+tracer = get_tracer()
 
 
 def filter_headers(header) -> Dict[str, str]:
@@ -346,9 +351,23 @@ async def proxy_request(request: Request):
                     },
                 )
 
-            upstream_response = await matched_service.client.request(
-                method=request.method, url=target_url, headers=headers, content=body
-            )
+            with tracer.start_as_current_span("gateway.proxy_to_backend") as span:
+                try:
+                    span.set_attribute("gateway.service",matched_service.name)
+                    span.set_attribute("gateway.backend",backend)
+                    span.set_attribute("http.method",request.method)
+                    span.set_atribute("http.route",request.url.path)
+                    span.set_attribute("gateway.target_path",target_path)
+                    span.set_attribute("")
+                    upstream_response = await matched_service.client.request(
+                        method=request.method, url=target_url, headers=headers, content=body
+                    )
+                    span.set_attribute("http.status_code",upstream_response.status_code)
+
+                except httpx.RequestError as exc:
+                    span.record_exception(exc)
+                    span.set_attribute("error",True)
+                    raise
             duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
             response_headers = filter_headers(upstream_response.headers)
             record_backend_success(matched_service, backend)
