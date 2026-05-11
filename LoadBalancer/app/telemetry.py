@@ -2,10 +2,10 @@ import logging
 from fastapi import FastAPI
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
-from opentelemetry.instrumetion.fastapi import FastAPIInstrumentor
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TraceProvider
+from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import (BatchSpanProcessor,ConsoleSpanExporter)
 
 logger = logging.getLogger(__name__)
@@ -19,8 +19,8 @@ def setup_telemetry(app:FastAPI,settings) -> None:
     
     resource = Resource.create({"service.name":settings.otel_service_name,"service.version":"1.0.0","deployment.environment":"local"})
 
-    provider = TraceProvider(resource=resource)
-    trace.set_trace_provider(provider)
+    provider = TracerProvider(resource=resource)
+    trace.set_tracer_provider(provider)
 
     if settings.otel_console_exporter_enabled:
         provider.add_span_processor(BatchSpanProcessor(ConsoleSpanExporter()))
@@ -30,7 +30,7 @@ def setup_telemetry(app:FastAPI,settings) -> None:
 
     
     FastAPIInstrumentor.instrument_app(app)
-    HTTPXClientInstrumentor.instrument_client()
+    HTTPXClientInstrumentor().instrument()
 
     logger.info(
         "OpenTelemetry initialized",

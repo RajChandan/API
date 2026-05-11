@@ -356,9 +356,9 @@ async def proxy_request(request: Request):
                     span.set_attribute("gateway.service",matched_service.name)
                     span.set_attribute("gateway.backend",backend)
                     span.set_attribute("http.method",request.method)
-                    span.set_atribute("http.route",request.url.path)
+                    span.set_attribute("http.route",request.url.path)
                     span.set_attribute("gateway.target_path",target_path)
-                    span.set_attribute("")
+                    span.set_attribute("http.route",request.url.path)
                     upstream_response = await matched_service.client.request(
                         method=request.method, url=target_url, headers=headers, content=body
                     )
