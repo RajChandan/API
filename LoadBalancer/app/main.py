@@ -187,9 +187,42 @@ async def gateway_metrics():
     return Response(content=content, media_type=content_type)
 
 
+@app.get("/health/live")
+async def health_live():
+    return {"status":"alive"}
+
+
+@app.get("/health/ready")
+async def health_ready(request:Request):
+    gateway_state = request.app.state.gateway_state
+
+    service_status = {}
+
+    for service_name,service_state in gateway_state.services.items():
+        healthy_backends = [ backend for backend in service_state.backends if service_state.backend_states[backend].healthy]
+
+        service_status[service_name] = {
+            "prefix": service_state.prefix,
+            "healthy_backend_count":len(healthy_backends),"total_backend_count":len(service_state.backends),"ready":len(healthy_backends) >0
+        }
+
+    all_services_ready = all(status["ready"] for status in service_status.values())
+
+    if not all_services_ready:
+        return JSONResponse(status_code=503,content={"status":"not_ready","services":service_status})
+
+    return {"status":"ready","services":service_status}
+
+
+
+
 @app.api_route(
     "/{full_path:path}",
     methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
 )
 async def catch_all(request: Request):
     return await proxy_request(request)
+
+
+
+
